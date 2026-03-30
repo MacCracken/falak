@@ -1,0 +1,38 @@
+[package]
+name = "falak"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+description = "Falak — orbital mechanics engine for Keplerian orbits, perturbations, transfers, and celestial mechanics"
+homepage = "https://github.com/MacCracken/falak"
+repository = "https://github.com/MacCracken/falak"
+readme = "README.md"
+documentation = "https://docs.rs/falak"
+keywords = ["orbital", "mechanics", "celestial", "kepler", "astrodynamics"]
+categories = ["science", "simulation"]
+publish = false
+exclude = [".claude/", ".github/", "docs/", "scripts/"]
+
+[features]
+default = []
+logging = ["dep:tracing-subscriber"]
+physics = ["dep:impetus"]
+
+[dependencies]
+hisab = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+
+# Optional
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+impetus = { version = "1", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmarks"
+harness = false
