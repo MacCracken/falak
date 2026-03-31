@@ -2,6 +2,8 @@
 //!
 //! Covers elliptical (e < 1), parabolic (e = 1), and hyperbolic (e > 1) orbits.
 
+use tracing::instrument;
+
 use crate::error::{FalakError, Result};
 
 /// Gravitational constant G (m³ kg⁻¹ s⁻²).
@@ -105,6 +107,8 @@ pub fn vis_viva(radius: f64, semi_major_axis: f64, mu: f64) -> Result<f64> {
 ///
 /// Returns [`FalakError::InvalidParameter`] if eccentricity is out of range.
 /// Returns [`FalakError::ConvergenceError`] if the solver fails to converge.
+#[must_use = "returns the computed eccentric anomaly"]
+#[instrument(level = "trace")]
 pub fn solve_kepler_elliptic(mean_anomaly: f64, eccentricity: f64) -> Result<f64> {
     if !(0.0..1.0).contains(&eccentricity) {
         return Err(FalakError::InvalidParameter(
@@ -155,6 +159,8 @@ pub fn solve_kepler_elliptic(mean_anomaly: f64, eccentricity: f64) -> Result<f64
 ///
 /// Returns [`FalakError::InvalidParameter`] if eccentricity is not > 1.
 /// Returns [`FalakError::ConvergenceError`] if the solver fails to converge.
+#[must_use = "returns the computed hyperbolic anomaly"]
+#[instrument(level = "trace")]
 pub fn solve_kepler_hyperbolic(mean_anomaly: f64, eccentricity: f64) -> Result<f64> {
     if eccentricity <= 1.0 {
         return Err(FalakError::InvalidParameter(
@@ -234,6 +240,7 @@ pub fn eccentric_to_mean_anomaly(eccentric_anomaly: f64, eccentricity: f64) -> f
 /// # Errors
 ///
 /// Returns errors from [`solve_kepler_elliptic`].
+#[must_use = "returns the computed true anomaly"]
 pub fn mean_to_true_anomaly(mean_anomaly: f64, eccentricity: f64) -> Result<f64> {
     let e_anom = solve_kepler_elliptic(mean_anomaly, eccentricity)?;
     Ok(eccentric_to_true_anomaly(e_anom, eccentricity))
@@ -287,6 +294,7 @@ pub fn radius_at_true_anomaly(semi_major_axis: f64, eccentricity: f64, true_anom
 
 /// Cartesian state vector (position and velocity).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct StateVector {
     /// Position `[x, y, z]` (metres).
     pub position: [f64; 3],
@@ -302,6 +310,8 @@ pub struct StateVector {
 /// # Errors
 ///
 /// Returns [`FalakError::InvalidParameter`] if `mu` is not positive.
+#[must_use = "returns the computed state vector"]
+#[instrument(level = "trace", skip(elements))]
 pub fn elements_to_state(elements: &crate::orbit::OrbitalElements, mu: f64) -> Result<StateVector> {
     if mu <= 0.0 {
         return Err(FalakError::InvalidParameter(
@@ -365,6 +375,8 @@ pub fn elements_to_state(elements: &crate::orbit::OrbitalElements, mu: f64) -> R
 /// # Errors
 ///
 /// Returns [`FalakError::InvalidParameter`] if `mu` is not positive or position is zero.
+#[must_use = "returns the computed orbital elements"]
+#[instrument(level = "trace", skip(state))]
 pub fn state_to_elements(state: &StateVector, mu: f64) -> Result<crate::orbit::OrbitalElements> {
     if mu <= 0.0 {
         return Err(FalakError::InvalidParameter(

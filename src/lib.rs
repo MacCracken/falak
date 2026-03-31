@@ -5,9 +5,8 @@
 //!
 //! Arabic/Persian: فلک (falak) — sky, celestial sphere
 //!
-//! Provides Keplerian orbit mechanics, transfer maneuvers, perturbation
-//! models, N-body simulation, ephemeris computation, reference frames,
-//! and spacecraft maneuver planning. Built on
+//! Provides Keplerian orbit mechanics with anomaly conversions, state vector
+//! transforms, and cross-crate bridges for the AGNOS ecosystem. Built on
 //! [hisab](https://crates.io/crates/hisab) for math foundations.
 //!
 //! # Modules

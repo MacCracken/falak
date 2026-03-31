@@ -28,16 +28,18 @@ impl OrbitPath {
     ///
     /// `mu`: gravitational parameter (m³/s²).
     /// `num_points`: number of points around the orbit.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::FalakError::InvalidParameter`] if orbital parameters or μ are invalid.
     pub fn from_elements(
         elements: &crate::orbit::OrbitalElements,
         mu: f64,
         num_points: usize,
-    ) -> Self {
+    ) -> crate::error::Result<Self> {
         let a = elements.semi_major_axis;
         let e = elements.eccentricity;
-        // Kepler's third law via kepler module
-        let period = crate::kepler::orbital_period(a, mu).unwrap_or(0.0);
+        let period = crate::kepler::orbital_period(a, mu)?;
 
         let mut points = Vec::with_capacity(num_points);
         let mut speeds = Vec::with_capacity(num_points);
@@ -54,17 +56,17 @@ impl OrbitPath {
             points.push([px, py, 0.0]);
 
             // Vis-viva speed
-            let v = crate::kepler::vis_viva(r, a, mu).unwrap_or(0.0);
+            let v = crate::kepler::vis_viva(r, a, mu)?;
             speeds.push(v);
         }
 
-        Self {
+        Ok(Self {
             points,
             speeds,
             period,
             semi_major_axis: a,
             eccentricity: e,
-        }
+        })
     }
 }
 
@@ -129,7 +131,7 @@ mod tests {
     #[test]
     fn orbit_path_circular() {
         let elements = crate::orbit::OrbitalElements::new(7e6, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap();
-        let path = OrbitPath::from_elements(&elements, 3.986e14, 36);
+        let path = OrbitPath::from_elements(&elements, 3.986e14, 36).unwrap();
         assert_eq!(path.points.len(), 36);
         assert_eq!(path.speeds.len(), 36);
         assert!(path.period > 0.0);
@@ -143,7 +145,7 @@ mod tests {
     #[test]
     fn orbit_path_elliptical() {
         let elements = crate::orbit::OrbitalElements::new(10e6, 0.5, 0.0, 0.0, 0.0, 0.0).unwrap();
-        let path = OrbitPath::from_elements(&elements, 3.986e14, 72);
+        let path = OrbitPath::from_elements(&elements, 3.986e14, 72).unwrap();
         assert_eq!(path.points.len(), 72);
         assert!((path.eccentricity - 0.5).abs() < 0.001);
         // Elliptical → speed varies

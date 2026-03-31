@@ -30,8 +30,8 @@ pub fn luminosity_to_habitable_zone_au(luminosity_w: f64) -> f64 {
 
 // ── Impetus bridges (physics) ──────────────────────────────────────────────
 
-/// Convert orbital velocity `[vx, vy, vz]` (m/s) and position `[x, y, z]` (m)
-/// to gravitational force magnitude (N) for a given body mass and central mass.
+/// Convert position `[x, y, z]` (m) to gravitational force magnitude (N)
+/// for a given body mass and central mass.
 ///
 /// F = G × M × m / r²
 #[must_use]
@@ -47,10 +47,10 @@ pub fn orbital_to_gravity_force(
     crate::kepler::G * central_mass_kg * body_mass_kg / r2
 }
 
-/// Convert orbital velocity magnitude (m/s) and gravitational parameter μ (m³/s²)
-/// to escape velocity threshold.
+/// Compute the specific energy deficit relative to escape velocity (J/kg).
 ///
-/// v_escape = sqrt(2μ/r). Returns the kinetic energy deficit (positive = bound).
+/// v_escape = sqrt(2μ/r). Returns 0.5 × (v_escape² − v²).
+/// Positive → bound orbit, negative → escaping.
 #[must_use]
 #[inline]
 pub fn escape_energy_deficit(velocity_ms: f64, mu: f64, radius_m: f64) -> f64 {
