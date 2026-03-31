@@ -161,6 +161,37 @@ pub struct TransferTrajectory {
     pub transfer_time: f64,
 }
 
+/// Compute delta-v magnitude between a circular orbit velocity and a transfer velocity.
+///
+/// The circular orbit velocity vector is perpendicular to the position vector
+/// in the orbital plane, with magnitude sqrt(mu/r).
+fn circular_departure_dv(pos: [f64; 3], r: f64, v_transfer: &[f64; 3], mu: f64) -> f64 {
+    let v_circ_mag = (mu / r).sqrt();
+    // Circular velocity direction: perpendicular to r in the transfer plane.
+    // Use cross(z_hat, r_hat) as the tangent direction (prograde).
+    // For general 3D: v_circ = v_circ_mag * cross([0,0,1], r_hat) / |cross|
+    let r_hat = [pos[0] / r, pos[1] / r, pos[2] / r];
+    let cross = [-r_hat[1], r_hat[0], 0.0]; // cross([0,0,1], r_hat)
+    let cross_mag = (cross[0] * cross[0] + cross[1] * cross[1]).sqrt();
+
+    if cross_mag < 1e-15 {
+        // Position along z-axis — degenerate, fall back to speed difference
+        let v_mag = (v_transfer[0].powi(2) + v_transfer[1].powi(2) + v_transfer[2].powi(2)).sqrt();
+        return (v_mag - v_circ_mag).abs();
+    }
+
+    let v_circ = [
+        v_circ_mag * cross[0] / cross_mag,
+        v_circ_mag * cross[1] / cross_mag,
+        0.0,
+    ];
+
+    ((v_transfer[0] - v_circ[0]).powi(2)
+        + (v_transfer[1] - v_circ[1]).powi(2)
+        + (v_transfer[2] - v_circ[2]).powi(2))
+    .sqrt()
+}
+
 impl TransferTrajectory {
     /// Generate a transfer trajectory from a Lambert solution.
     ///
@@ -206,18 +237,15 @@ impl TransferTrajectory {
             points.push(state.position);
         }
 
-        // Compute departure and arrival delta-v magnitudes
-        // (departure relative to circular orbit at r1, arrival relative to circular at r2)
+        // Compute departure and arrival delta-v magnitudes.
+        // Delta-v is the magnitude of the velocity change vector, not the
+        // difference of speed magnitudes. The circular orbit velocity is
+        // tangent to the orbit (perpendicular to position, in the orbital plane).
         let r1_mag = (r1[0] * r1[0] + r1[1] * r1[1] + r1[2] * r1[2]).sqrt();
         let r2_mag = (r2[0] * r2[0] + r2[1] * r2[1] + r2[2] * r2[2]).sqrt();
-        let v_circ1 = (mu / r1_mag).sqrt();
-        let v_circ2 = (mu / r2_mag).sqrt();
-        let v1_mag =
-            (solution.v1[0].powi(2) + solution.v1[1].powi(2) + solution.v1[2].powi(2)).sqrt();
-        let v2_mag =
-            (solution.v2[0].powi(2) + solution.v2[1].powi(2) + solution.v2[2].powi(2)).sqrt();
-        let dv1 = (v1_mag - v_circ1).abs();
-        let dv2 = (v2_mag - v_circ2).abs();
+
+        let dv1 = circular_departure_dv(r1, r1_mag, &solution.v1, mu);
+        let dv2 = circular_departure_dv(r2, r2_mag, &solution.v2, mu);
 
         Ok(Self {
             points,

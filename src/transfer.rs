@@ -316,7 +316,8 @@ pub fn lambert(
     let sin_dnu = dnu.sin();
     let a_param = sin_dnu * (r1 * r2 / (1.0 - cos_dnu)).sqrt();
 
-    if a_param.abs() < 1e-30 {
+    // Relative threshold: a_param should be significant relative to the orbit scale
+    if a_param.abs() < 1e-8 * (r1 + r2) {
         return Err(FalakError::InvalidParameter(
             "degenerate transfer geometry (positions are collinear with 180° transfer)".into(),
         ));
@@ -347,33 +348,25 @@ pub fn lambert(
             ));
         }
 
-        // Derivative dT/dz for Newton step
-        let dt_dz = if z.abs() > 1e-10 {
-            let y_dot = (x * x * x * (c2 - 3.0 * c3 / (2.0 * c2))
-                + a_param / (8.0 * c2) * (3.0 * c3 * y.sqrt() / c2 + a_param / y.sqrt()))
-                / mu.sqrt();
-            // Simplified: use finite difference as fallback
-            let h = z.abs() * 1e-7 + 1e-10;
-            let (c2p, c3p) = stumpff(z + h);
-            let yp = r1 + r2 + a_param * ((z + h) * c3p - 1.0) / c2p.sqrt();
-            if yp > 0.0 {
-                let xp = (yp / c2p).sqrt();
-                let t_zp = (xp * xp * xp * c3p + a_param * yp.sqrt()) / mu.sqrt();
-                (t_zp - t_z) / h
-            } else {
-                y_dot
-            }
+        // Derivative dT/dz via finite difference (robust for all z regimes)
+        let h = z.abs() * 1e-7 + 1e-8;
+        let (c2p, c3p) = stumpff(z + h);
+        let yp = r1 + r2 + a_param * ((z + h) * c3p - 1.0) / c2p.sqrt();
+        let dt_dz = if yp > 0.0 {
+            let xp = (yp / c2p).sqrt();
+            let t_zp = (xp * xp * xp * c3p + a_param * yp.sqrt()) / mu.sqrt();
+            (t_zp - t_z) / h
         } else {
-            // Near z=0: finite difference
-            let h = 1e-6;
-            let (c2p, c3p) = stumpff(z + h);
-            let yp = r1 + r2 + a_param * ((z + h) * c3p - 1.0) / c2p.sqrt();
-            if yp > 0.0 {
-                let xp = (yp / c2p).sqrt();
-                let t_zp = (xp * xp * xp * c3p + a_param * yp.sqrt()) / mu.sqrt();
-                (t_zp - t_z) / h
+            // y went negative — step is too aggressive, use smaller h
+            let h2 = h * 0.01;
+            let (c2p2, c3p2) = stumpff(z + h2);
+            let yp2 = r1 + r2 + a_param * ((z + h2) * c3p2 - 1.0) / c2p2.sqrt();
+            if yp2 > 0.0 {
+                let xp2 = (yp2 / c2p2).sqrt();
+                let t_zp2 = (xp2 * xp2 * xp2 * c3p2 + a_param * yp2.sqrt()) / mu.sqrt();
+                (t_zp2 - t_z) / h2
             } else {
-                1.0 // fallback to avoid division by zero
+                1.0 // fallback
             }
         };
 
@@ -780,5 +773,58 @@ mod tests {
             v1_mag > 1000.0 && v1_mag < 20000.0,
             "retrograde v1_mag={v1_mag} should be orbital"
         );
+    }
+
+    #[test]
+    fn lambert_hyperbolic_short_tof() {
+        // Very short TOF forces a hyperbolic transfer (high energy)
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [0.0, 7e6, 0.0]; // 90°
+        let tof = 500.0; // much shorter than quarter-period (~1400s)
+
+        let sol = lambert(r1, r2, tof, MU_EARTH, true).unwrap();
+
+        // Speed should be higher than circular (hyperbolic excess)
+        let v_circ = (MU_EARTH / 7e6).sqrt();
+        let v1_mag = (sol.v1[0] * sol.v1[0] + sol.v1[1] * sol.v1[1] + sol.v1[2] * sol.v1[2]).sqrt();
+        assert!(
+            v1_mag > v_circ * 1.1,
+            "short TOF should give higher speed: v1={v1_mag:.0}, v_circ={v_circ:.0}"
+        );
+    }
+
+    #[test]
+    fn lambert_180_degrees_rejected() {
+        // Exactly 180° (collinear, anti-parallel) is degenerate
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [-7e6, 0.0, 0.0]; // exactly opposite
+        let result = lambert(r1, r2, 3000.0, MU_EARTH, true);
+        assert!(
+            result.is_err(),
+            "180° transfer should be rejected as degenerate"
+        );
+    }
+
+    #[test]
+    fn lambert_3d_inclined() {
+        // Transfer with out-of-plane component
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [0.0, 5e6, 5e6]; // inclined target
+        let tof = 2000.0;
+
+        let sol = lambert(r1, r2, tof, MU_EARTH, true).unwrap();
+
+        // Velocity should have z-component (out of plane)
+        assert!(
+            sol.v1[2].abs() > 100.0,
+            "3D transfer should have vz component: vz={}",
+            sol.v1[2]
+        );
+
+        // Velocities should be finite
+        for i in 0..3 {
+            assert!(sol.v1[i].is_finite());
+            assert!(sol.v2[i].is_finite());
+        }
     }
 }

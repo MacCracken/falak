@@ -451,7 +451,11 @@ pub struct EclipseInfo {
 /// # Returns
 ///
 /// [`EclipseInfo`] with the eclipse state and shadow fraction.
+///
+/// **Limitation**: assumes parallel solar rays (Sun at infinity). Accurate for
+/// LEO/MEO; use [`eclipse_conical`] for GEO or cislunar orbits.
 #[must_use]
+#[inline]
 pub fn eclipse_cylindrical(sat_pos: [f64; 3], sun_pos: [f64; 3], body_radius: f64) -> EclipseInfo {
     // Unit vector from body centre toward the Sun
     let sun_mag =
@@ -513,6 +517,7 @@ pub fn eclipse_cylindrical(sat_pos: [f64; 3], sun_pos: [f64; 3], body_radius: f6
 /// * `body_radius` — Radius of the occulting body (metres)
 /// * `sun_radius` — Radius of the Sun (metres, default 6.957e8)
 #[must_use]
+#[inline]
 pub fn eclipse_conical(
     sat_pos: [f64; 3],
     sun_pos: [f64; 3],
@@ -590,6 +595,11 @@ pub fn eclipse_conical(
 }
 
 /// Approximate fractional overlap area of two circles (discs on the sky).
+/// Fraction of the Sun's disc (angular radius `r2`) obscured by the body
+/// (angular radius `r1`) at angular separation `sep`.
+///
+/// This equals the fraction of sunlight blocked — a satellite in this
+/// penumbral zone receives `(1 - overlap_fraction)` of full illumination.
 fn overlap_fraction(sep: f64, r1: f64, r2: f64) -> f64 {
     if sep >= r1 + r2 {
         return 0.0;
@@ -962,6 +972,50 @@ mod tests {
             info.state == EclipseState::Umbra || info.state == EclipseState::Penumbra,
             "GEO satellite behind Earth should be eclipsed: {:?}",
             info.state
+        );
+        // GEO behind Earth → umbra (Earth angular radius ~8.7° >> Sun ~0.27°)
+        assert_eq!(info.state, EclipseState::Umbra);
+    }
+
+    #[test]
+    fn eclipse_cylindrical_vs_conical_agreement() {
+        // Both models should agree on clearly-eclipsed and clearly-sunlit cases
+        let sun = [AU, 0.0, 0.0];
+
+        // Clearly sunlit (Sun-side)
+        let sat_sunlit = [R_EARTH + 400e3, 0.0, 0.0];
+        let cyl = eclipse_cylindrical(sat_sunlit, sun, R_EARTH);
+        let con = eclipse_conical(sat_sunlit, sun, R_EARTH, R_SUN);
+        assert_eq!(cyl.state, EclipseState::Sunlit);
+        assert_eq!(con.state, EclipseState::Sunlit);
+
+        // Clearly in shadow (directly behind Earth)
+        let sat_shadow = [-(R_EARTH + 400e3), 0.0, 0.0];
+        let cyl = eclipse_cylindrical(sat_shadow, sun, R_EARTH);
+        let con = eclipse_conical(sat_shadow, sun, R_EARTH, R_SUN);
+        assert_eq!(cyl.state, EclipseState::Umbra);
+        assert_eq!(con.state, EclipseState::Umbra);
+    }
+
+    #[test]
+    fn eclipse_penumbra_region() {
+        // Place satellite at the edge of Earth's shadow — should be penumbra
+        // in conical model, but binary in cylindrical model.
+        let sun = [AU, 0.0, 0.0];
+        // Satellite behind Earth, offset by slightly more than R_EARTH
+        let offset = R_EARTH * 1.001; // just outside cylindrical shadow
+        let sat = [-(R_EARTH + 400e3), offset, 0.0];
+
+        let cyl = eclipse_cylindrical(sat, sun, R_EARTH);
+        // Cylindrical: just outside shadow → sunlit
+        assert_eq!(cyl.state, EclipseState::Sunlit);
+
+        // Conical may still detect penumbra (or sunlit depending on geometry)
+        let con = eclipse_conical(sat, sun, R_EARTH, R_SUN);
+        assert!(
+            con.state == EclipseState::Sunlit || con.state == EclipseState::Penumbra,
+            "edge case should be sunlit or penumbra: {:?}",
+            con.state
         );
     }
 }
