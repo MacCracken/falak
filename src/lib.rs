@@ -21,8 +21,11 @@
 //! - [`frame`] — Reference frames (ECI, ECEF, perifocal, rotating, geodetic)
 //! - [`ephemeris`] — Julian date, sidereal time, calendar conversions
 //!
+//! - [`perturbation`] — J2/J3, drag, SRP, third-body perturbation accelerations
+//! - [`maneuver`] — Impulsive burns, rocket equation, escape/capture delta-v
+//!
 //! ### Stubs (not yet implemented)
-//! - [`perturbation`], [`nbody`], [`maneuver`]
+//! - [`nbody`]
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
@@ -40,7 +43,7 @@ pub mod kepler;
 /// Orbital transfer maneuvers — Hohmann, bi-elliptic, plane change, phasing.
 pub mod transfer;
 
-/// Orbital perturbations (stub — not yet implemented).
+/// Orbital perturbations — J2/J3 oblateness, drag, SRP, third-body.
 pub mod perturbation;
 
 /// N-body gravitational simulation (stub — not yet implemented).
@@ -52,7 +55,7 @@ pub mod ephemeris;
 /// Reference frames — ECI, ECEF, perifocal, rotating, geodetic.
 pub mod frame;
 
-/// Spacecraft maneuvers (stub — not yet implemented).
+/// Spacecraft maneuvers — impulsive burns, rocket equation, escape/capture.
 pub mod maneuver;
 
 #[cfg(feature = "logging")]

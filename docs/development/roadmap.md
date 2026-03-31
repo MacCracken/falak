@@ -14,34 +14,20 @@ Falak does NOT own:
 
 ## Completed
 
-| Phase | Release | Summary |
-|-------|---------|---------|
-| V0.1 | Foundation | Error types, OrbitalElements struct with validation, module stubs for all domains |
+| Phase | Summary |
+|-------|---------|
+| Foundation | Error types, OrbitalElements struct with validation (elliptical/parabolic/hyperbolic) |
+| Keplerian Orbits | Kepler's equation solver (elliptic + hyperbolic), all anomaly conversions, orbital period/mean motion, vis-viva, orbital radius, state vector ↔ elements |
+| Transfer Maneuvers | Hohmann transfer, bi-elliptic transfer, plane change, phasing orbits |
+| Perturbation Models | J2/J3 zonal harmonics, secular J2 rates, atmospheric drag (exponential model), solar radiation pressure, third-body perturbations |
+| Reference Frames | Perifocal ↔ ECI, ECI ↔ ECEF, ECEF ↔ geodetic (WGS-84 Bowring), inertial ↔ rotating (synodic) |
+| Ephemeris | Calendar ↔ Julian Date, MJD, Unix timestamp, GMST (IAU 1982), Julian centuries, day of year |
+| Maneuvers | Impulsive burn types, delta-v budgets, Tsiolkovsky rocket equation, escape/capture delta-v, Oberth effect |
+| Cross-Crate Bridges | Tara (stellar mass → μ, luminosity → HZ), impetus (gravity force, escape energy), badal (insolation, climate variation) |
+| Soorat Integration | OrbitPath from elements, planetary position/transfer/ground track data types |
+| Logging | Feature-gated structured tracing via FALAK_LOG |
 
 ## Backlog
-
-### Keplerian Orbits
-- [ ] Kepler's equation solver (Newton-Raphson with Danby starter)
-- [ ] Mean, eccentric, and true anomaly conversions
-- [ ] Orbital period and mean motion
-- [ ] Vis-viva equation (orbital velocity at any point)
-- [ ] Hyperbolic and parabolic orbit support (e >= 1)
-- [ ] State vector <--> orbital elements conversion
-
-### Transfer Maneuvers
-- [ ] Hohmann transfer (delta-v, time of flight)
-- [ ] Bi-elliptic transfer (when more efficient than Hohmann)
-- [ ] Lambert problem solver (given two positions and time)
-- [ ] Plane change maneuvers
-- [ ] Phasing orbits
-
-### Perturbation Models
-- [ ] J2 oblateness (secular and periodic)
-- [ ] Higher-order zonal harmonics (J3, J4)
-- [ ] Atmospheric drag (exponential atmosphere model)
-- [ ] Solar radiation pressure
-- [ ] Third-body perturbations (Sun, Moon)
-- [ ] General perturbation theory (osculating elements)
 
 ### N-Body Simulation
 - [ ] Direct N-body gravitational computation
@@ -51,45 +37,45 @@ Falak does NOT own:
 - [ ] Barnes-Hut tree approximation for large N
 - [ ] Restricted three-body problem (Lagrange points)
 
-### Ephemeris Computation
-- [ ] Julian date / Modified Julian date conversions
-- [ ] Sidereal time computation
+### Orbit Propagation
+- [ ] Two-body propagation (Kepler problem forward in time)
+- [ ] Perturbed orbit propagation (J2 + drag + SRP + third-body)
+- [ ] Cowell's method (direct integration of equations of motion)
+- [ ] Encke's method (deviation from reference orbit)
+- [ ] General perturbation theory (osculating → mean elements)
+
+### Ephemeris — Extended
 - [ ] VSOP87 planetary positions (truncated series)
 - [ ] Simple lunar ephemeris
 - [ ] Rise/set/transit times
 - [ ] Eclipse prediction
-
-### Reference Frames
-- [ ] ECI (Earth-Centered Inertial) frame
-- [ ] ECEF (Earth-Centered Earth-Fixed) frame
-- [ ] Perifocal frame
-- [ ] Rotating (synodic) frame for CR3BP
-- [ ] Frame transformation utilities
 - [ ] Precession and nutation corrections
 
-## Cross-Crate Bridges
+### Transfer Maneuvers — Extended
+- [ ] Lambert problem solver (given two positions and time)
+- [ ] Combined plane change + altitude maneuvers
 
-- [ ] `bridge.rs` module — primitive-value conversions for cross-crate orbital mechanics
-- [ ] **tara bridge**: stellar mass (kg) → gravitational parameter μ; luminosity (W) → habitable zone distance (AU)
-- [ ] **impetus bridge**: orbital velocity [f32; 3] → gravitational force vector; escape velocity → kinetic energy threshold
-- [ ] **badal bridge**: solar distance (AU), axial tilt (°) → seasonal insolation; orbital eccentricity → climate variation amplitude
+### Maneuver Planning — Extended
+- [ ] Maneuver plan sequencing (multiple burns with timing)
+- [ ] Continuous low-thrust trajectory modelling
 
-## Soorat Integration
+### Cross-Crate Bridges — Extended
+- [ ] **tara bridge**: additional stellar property conversions
+- [ ] **impetus bridge**: orbital velocity → gravitational force vector
+- [ ] **badal bridge**: additional climate coupling parameters
 
-- [ ] `integration/soorat.rs` module — feature-gated `soorat-compat`
-- [ ] **Orbit path**: elliptical/hyperbolic trajectory points for line rendering
-- [ ] **Planetary positions**: body positions at epoch for instanced sphere rendering
-- [ ] **Transfer trajectory**: Hohmann/Lambert arc points with delta-v markers for colored line rendering
-- [ ] **Ground track**: sub-satellite point trace on planetary surface for map overlay rendering
+### Soorat Integration — Extended
+- [ ] Orbit path in ECI frame (currently perifocal only)
+- [ ] Transfer trajectory generation from Hohmann/Lambert results
+- [ ] Ground track computation from orbital elements + GMST
 
 ## Future (demand-gated)
 
-- Ground track computation
 - Orbit determination from observations
 - Conjunction analysis / collision avoidance
 - Interplanetary trajectory design (patched conics)
-- Low-thrust trajectory optimization
 - Gravity assist (flyby) planning
 - Satellite constellation design (Walker delta/star)
 - TLE / SGP4 propagation
 - Relativistic corrections
+- Higher-order zonal harmonics (J4+)

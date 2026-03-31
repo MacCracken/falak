@@ -121,6 +121,36 @@ fn ephemeris_functions(c: &mut Criterion) {
     });
 }
 
+fn perturbation_functions(c: &mut Criterion) {
+    let pos = [falak::perturbation::R_EARTH + 400e3, 0.0, 0.0];
+
+    c.bench_function("j2_acceleration", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::perturbation::j2_acceleration(
+                pos,
+                3.986e14,
+                falak::perturbation::J2_EARTH,
+                falak::perturbation::R_EARTH,
+            ));
+        });
+    });
+}
+
+fn maneuver_functions(c: &mut Criterion) {
+    c.bench_function("propellant_mass_fraction", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::maneuver::propellant_mass_fraction(3000.0, 300.0));
+        });
+    });
+
+    c.bench_function("escape_delta_v", |b| {
+        b.iter(|| {
+            let _ =
+                std::hint::black_box(falak::maneuver::escape_delta_v(6.671e6, 3.986e14, 3000.0));
+        });
+    });
+}
+
 fn bridge_functions(c: &mut Criterion) {
     c.bench_function("stellar_mass_to_mu", |b| {
         b.iter(|| {
@@ -149,6 +179,8 @@ criterion_group!(
     transfer_functions,
     frame_transforms,
     ephemeris_functions,
+    perturbation_functions,
+    maneuver_functions,
     bridge_functions,
 );
 criterion_main!(benches);
