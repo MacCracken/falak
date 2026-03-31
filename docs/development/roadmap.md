@@ -18,8 +18,6 @@ Falak does NOT own:
 - [ ] General perturbation theory (osculating → mean elements)
 
 ### N-Body Simulation — Extended
-- [ ] Pre-allocated integration buffers (RK4 allocates ~10 Vecs per step — dominates runtime for large N)
-- [ ] Canonical μ-based gravity option (current uses G×M which diverges from standard μ values)
 - [ ] Barnes-Hut tree approximation for large N
 - [ ] Restricted three-body problem (Lagrange points)
 
@@ -42,7 +40,6 @@ Falak does NOT own:
 
 ### Soorat Integration — Extended
 - [ ] Transfer trajectory generation from Hohmann/Lambert results
-- [ ] Ground track computation from orbital elements + GMST
 
 ## Future (demand-gated)
 

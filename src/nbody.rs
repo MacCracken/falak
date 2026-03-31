@@ -18,10 +18,12 @@ pub struct Body {
     pub velocity: [f64; 3],
     /// Mass (kg).
     pub mass: f64,
+    /// Gravitational parameter μ (m³/s²). If `None`, uses `G × mass`.
+    pub mu: Option<f64>,
 }
 
 impl Body {
-    /// Create a new body.
+    /// Create a new body (gravity computed as G × mass).
     #[must_use]
     #[inline]
     pub fn new(position: [f64; 3], velocity: [f64; 3], mass: f64) -> Self {
@@ -29,7 +31,30 @@ impl Body {
             position,
             velocity,
             mass,
+            mu: None,
         }
+    }
+
+    /// Create a new body with an explicit gravitational parameter μ.
+    ///
+    /// Use this when the standard μ value is known more precisely than G × M
+    /// (e.g., μ_Earth = 3.986004418e14 m³/s²).
+    #[must_use]
+    #[inline]
+    pub fn with_mu(position: [f64; 3], velocity: [f64; 3], mass: f64, mu: f64) -> Self {
+        Self {
+            position,
+            velocity,
+            mass,
+            mu: Some(mu),
+        }
+    }
+
+    /// Effective gravitational parameter (m³/s²).
+    #[must_use]
+    #[inline]
+    pub fn gravitational_parameter(&self) -> f64 {
+        self.mu.unwrap_or(G * self.mass)
     }
 
     /// Kinetic energy (J).
@@ -112,7 +137,8 @@ impl System {
                 let dy = self.bodies[j].position[1] - self.bodies[i].position[1];
                 let dz = self.bodies[j].position[2] - self.bodies[i].position[2];
                 let r = (dx * dx + dy * dy + dz * dz + self.softening_sq).sqrt();
-                pe -= G * self.bodies[i].mass * self.bodies[j].mass / r;
+                // Use μ_i × m_j / r (where μ_i = G×m_i or canonical μ)
+                pe -= self.bodies[i].gravitational_parameter() * self.bodies[j].mass / r;
             }
         }
         pe
@@ -150,10 +176,26 @@ impl System {
 /// Compute gravitational accelerations for all bodies via direct summation.
 ///
 /// O(N²) pairwise computation. Returns one `[ax, ay, az]` per body.
+/// Uses each body's [`Body::gravitational_parameter`] for gravity (canonical μ
+/// when available, otherwise G × mass).
 #[must_use]
 pub fn compute_accelerations(system: &System) -> Vec<[f64; 3]> {
     let n = system.bodies.len();
     let mut acc = vec![[0.0; 3]; n];
+    compute_accelerations_into(system, &mut acc);
+    acc
+}
+
+/// Compute gravitational accelerations into a pre-allocated buffer.
+///
+/// Same as [`compute_accelerations`] but avoids allocation.
+/// `acc` must have length ≥ `system.bodies.len()`.
+pub fn compute_accelerations_into(system: &System, acc: &mut Vec<[f64; 3]>) {
+    let n = system.bodies.len();
+    acc.resize(n, [0.0; 3]);
+    for a in acc.iter_mut() {
+        *a = [0.0, 0.0, 0.0];
+    }
     let eps2 = system.softening_sq;
 
     for i in 0..n {
@@ -166,8 +208,11 @@ pub fn compute_accelerations(system: &System) -> Vec<[f64; 3]> {
             let r = r2.sqrt();
             let r3 = r2 * r;
 
-            let fac_j = G * system.bodies[j].mass / r3;
-            let fac_i = G * system.bodies[i].mass / r3;
+            let mu_j = system.bodies[j].gravitational_parameter();
+            let mu_i = system.bodies[i].gravitational_parameter();
+
+            let fac_j = mu_j / r3;
+            let fac_i = mu_i / r3;
 
             acc[i][0] += fac_j * dx;
             acc[i][1] += fac_j * dy;
@@ -178,7 +223,6 @@ pub fn compute_accelerations(system: &System) -> Vec<[f64; 3]> {
             acc[j][2] -= fac_i * dz;
         }
     }
-    acc
 }
 
 // ── Leapfrog (Stormer-Verlet) integrator ──────────────────────────────────
@@ -425,12 +469,12 @@ mod tests {
     const M_EARTH: f64 = 5.972e24;
 
     fn two_body_system() -> System {
-        // Earth at origin, satellite in circular LEO
+        // Earth at origin with canonical μ, satellite in circular LEO
         let r = 7e6;
         let v = (MU_EARTH / r).sqrt();
         System::new(
             vec![
-                Body::new([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], M_EARTH),
+                Body::with_mu([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], M_EARTH, MU_EARTH),
                 Body::new([r, 0.0, 0.0], [0.0, v, 0.0], 1.0),
             ],
             0.0,
@@ -498,7 +542,17 @@ mod tests {
 
     #[test]
     fn accelerations_newton_third_law() {
-        let sys = two_body_system();
+        // Use G×M bodies (no canonical μ) for exact Newton's 3rd law
+        let r = 7e6;
+        let v = (G * M_EARTH / r).sqrt();
+        let sys = System::new(
+            vec![
+                Body::new([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], M_EARTH),
+                Body::new([r, 0.0, 0.0], [0.0, v, 0.0], 1.0),
+            ],
+            0.0,
+        )
+        .unwrap();
         let acc = compute_accelerations(&sys);
         // Newton's third law: m1*a1 + m2*a2 = 0
         for (k, (&a0, &a1)) in acc[0].iter().zip(acc[1].iter()).enumerate() {
@@ -514,10 +568,9 @@ mod tests {
     fn acceleration_magnitude() {
         let sys = two_body_system();
         let acc = compute_accelerations(&sys);
-        // Satellite acceleration should be ~G*M_earth/r² ≈ 8.13 m/s²
-        // (slightly different from μ/r² because G*M_earth ≠ μ_earth exactly)
+        // Satellite acceleration should be μ/r² ≈ 8.13 m/s² (canonical μ used)
         let a_sat = (acc[1][0] * acc[1][0] + acc[1][1] * acc[1][1] + acc[1][2] * acc[1][2]).sqrt();
-        let expected = G * M_EARTH / (7e6 * 7e6);
+        let expected = MU_EARTH / (7e6 * 7e6);
         assert!(
             (a_sat - expected).abs() / expected < 1e-6,
             "satellite accel: {a_sat} vs {expected}"
@@ -570,14 +623,14 @@ mod tests {
 
         let a = 7e6;
         let period = TAU * (a * a * a / MU_EARTH).sqrt();
-        let dt = 10.0;
+        let dt = 1.0; // 1s steps for tight closure
         let steps = (period / dt) as u64;
 
         for _ in 0..steps {
             step_rk4(&mut sys, dt);
         }
 
-        // RK4 should close the orbit well (not as tight as analytic due to G*M vs μ)
+        // RK4 with canonical μ should close the orbit tightly
         let dr = [
             sys.bodies[1].position[0] - r0[0],
             sys.bodies[1].position[1] - r0[1],
@@ -585,7 +638,10 @@ mod tests {
         ];
         let dr_mag = (dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2]).sqrt();
         let frac = dr_mag / 7e6;
-        assert!(frac < 0.02, "RK4 position drift: {frac:.6} of orbit radius");
+        assert!(
+            frac < 0.001,
+            "RK4 position drift: {frac:.6} of orbit radius"
+        );
     }
 
     // ── Evolve ───────────────────────────────────────────────────────

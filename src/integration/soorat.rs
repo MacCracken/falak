@@ -175,6 +175,70 @@ pub struct GroundTrack {
     pub orbit_numbers: Vec<u32>,
 }
 
+impl GroundTrack {
+    /// Compute a ground track from orbital elements over multiple orbits.
+    ///
+    /// Propagates the orbit analytically, converts each position to ECEF
+    /// (using GMST at the epoch + elapsed time), then to geodetic coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// * `elements` — Initial orbital elements (elliptical).
+    /// * `mu` — Gravitational parameter (m³/s²).
+    /// * `epoch_jd` — Julian Date of the epoch (for GMST computation).
+    /// * `num_orbits` — Number of orbits to trace.
+    /// * `points_per_orbit` — Number of sample points per orbit.
+    ///
+    /// # Errors
+    ///
+    /// Returns errors if elements are not elliptical or parameters are invalid.
+    pub fn from_elements(
+        elements: &crate::orbit::OrbitalElements,
+        mu: f64,
+        epoch_jd: f64,
+        num_orbits: u32,
+        points_per_orbit: usize,
+    ) -> crate::error::Result<Self> {
+        let period = crate::kepler::orbital_period(elements.semi_major_axis, mu)?;
+        let total_points = num_orbits as usize * points_per_orbit;
+        let total_time = period * num_orbits as f64;
+        let dt = total_time / total_points as f64;
+
+        let gmst0 = crate::ephemeris::gmst(epoch_jd);
+        let earth_rate = std::f64::consts::TAU / 86_164.1; // sidereal day
+
+        let mut points = Vec::with_capacity(total_points);
+        let mut altitudes = Vec::with_capacity(total_points);
+        let mut orbit_numbers = Vec::with_capacity(total_points);
+
+        for i in 0..total_points {
+            let t = dt * i as f64;
+            let orbit_num = (t / period) as u32;
+
+            // Propagate orbit to time t
+            let prop = crate::propagate::kepler(elements, mu, t)?;
+            let state = crate::kepler::elements_to_state(&prop, mu)?;
+
+            // GMST at this time
+            let gmst_t = gmst0 + earth_rate * t;
+
+            // ECI → ECEF → geodetic
+            let ecef = crate::frame::eci_to_ecef(state.position, gmst_t);
+            let geo = crate::frame::ecef_to_geodetic(ecef)?;
+
+            points.push([geo.latitude.to_degrees(), geo.longitude.to_degrees()]);
+            altitudes.push(geo.altitude / 1000.0); // metres → km
+            orbit_numbers.push(orbit_num);
+        }
+
+        Ok(Self {
+            points,
+            altitudes,
+            orbit_numbers,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +296,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ground_track_iss_like() {
+        // ISS-like orbit: ~400km altitude, 51.6° inclination
+        let elements =
+            crate::orbit::OrbitalElements::new(6.771e6, 0.0005, 0.9, 0.0, 0.0, 0.0).unwrap();
+        let jd = crate::ephemeris::J2000_JD;
+        let gt = GroundTrack::from_elements(&elements, 3.986e14, jd, 1, 36).unwrap();
+
+        assert_eq!(gt.points.len(), 36);
+        assert_eq!(gt.altitudes.len(), 36);
+        assert_eq!(gt.orbit_numbers.len(), 36);
+
+        // Latitude should be within ±inclination (in degrees, ~51.6°)
+        for pt in &gt.points {
+            assert!(pt[0].abs() < 60.0, "latitude out of range: {}°", pt[0]);
+        }
+
+        // Altitude should be ~400 km
+        for alt in &gt.altitudes {
+            assert!((*alt - 400.0).abs() < 50.0, "altitude: {} km", alt);
+        }
+
+        // All orbit 0
+        assert!(gt.orbit_numbers.iter().all(|&n| n == 0));
+    }
+
+    #[test]
+    fn ground_track_two_orbits() {
+        let elements = crate::orbit::OrbitalElements::new(7e6, 0.0, 0.5, 0.0, 0.0, 0.0).unwrap();
+        let gt = GroundTrack::from_elements(&elements, 3.986e14, crate::ephemeris::J2000_JD, 2, 18)
+            .unwrap();
+        assert_eq!(gt.points.len(), 36); // 2 × 18
+        // Should have both orbit 0 and orbit 1
+        assert!(gt.orbit_numbers.contains(&0));
+        assert!(gt.orbit_numbers.contains(&1));
     }
 
     #[test]
