@@ -33,15 +33,18 @@ pub fn perifocal_to_eci(
 
     let r11 = cos_o * cos_w - sin_o * sin_w * cos_i;
     let r12 = -(cos_o * sin_w + sin_o * cos_w * cos_i);
+    let r13 = sin_o * sin_i;
     let r21 = sin_o * cos_w + cos_o * sin_w * cos_i;
     let r22 = -(sin_o * sin_w - cos_o * cos_w * cos_i);
+    let r23 = -cos_o * sin_i;
     let r31 = sin_w * sin_i;
     let r32 = cos_w * sin_i;
+    let r33 = cos_i;
 
     [
-        r11 * pqw[0] + r12 * pqw[1],
-        r21 * pqw[0] + r22 * pqw[1],
-        r31 * pqw[0] + r32 * pqw[1],
+        r11 * pqw[0] + r12 * pqw[1] + r13 * pqw[2],
+        r21 * pqw[0] + r22 * pqw[1] + r23 * pqw[2],
+        r31 * pqw[0] + r32 * pqw[1] + r33 * pqw[2],
     ]
 }
 
@@ -61,18 +64,22 @@ pub fn eci_to_perifocal(
     let (cos_i, sin_i) = (inclination.cos(), inclination.sin());
 
     // Transpose of the perifocal→ECI matrix (Rᵀ = R⁻¹ for rotation)
-    let r11 = cos_o * cos_w - sin_o * sin_w * cos_i;
-    let r21 = -(cos_o * sin_w + sin_o * cos_w * cos_i);
-    let r12 = sin_o * cos_w + cos_o * sin_w * cos_i;
-    let r22 = -(sin_o * sin_w - cos_o * cos_w * cos_i);
-    let r13 = sin_w * sin_i;
-    let r23 = cos_w * sin_i;
-    let r33 = cos_i;
+    // Forward: [r11 r12 r13; r21 r22 r23; r31 r32 r33]
+    // Transpose row 1 = forward col 1, etc.
+    let t11 = cos_o * cos_w - sin_o * sin_w * cos_i;
+    let t12 = sin_o * cos_w + cos_o * sin_w * cos_i;
+    let t13 = sin_w * sin_i;
+    let t21 = -(cos_o * sin_w + sin_o * cos_w * cos_i);
+    let t22 = -(sin_o * sin_w - cos_o * cos_w * cos_i);
+    let t23 = cos_w * sin_i;
+    let t31 = sin_o * sin_i;
+    let t32 = -cos_o * sin_i;
+    let t33 = cos_i;
 
     [
-        r11 * eci[0] + r12 * eci[1] + r13 * eci[2],
-        r21 * eci[0] + r22 * eci[1] + r23 * eci[2],
-        -sin_i * sin_o * eci[0] + sin_i * cos_o * eci[1] + r33 * eci[2],
+        t11 * eci[0] + t12 * eci[1] + t13 * eci[2],
+        t21 * eci[0] + t22 * eci[1] + t23 * eci[2],
+        t31 * eci[0] + t32 * eci[1] + t33 * eci[2],
     ]
 }
 
@@ -447,6 +454,38 @@ mod tests {
             "Q: {} vs {}",
             pqw[1],
             pqw2[1]
+        );
+    }
+
+    #[test]
+    fn perifocal_eci_roundtrip_nonzero_w() {
+        // Round-trip with nonzero W component (out-of-plane position)
+        let pqw = [5e6, 3e6, 1e6]; // nonzero W
+        let raan = 1.2;
+        let inc = 0.8;
+        let aop = 0.5;
+        let eci = perifocal_to_eci(pqw, raan, inc, aop);
+        let pqw2 = eci_to_perifocal(eci, raan, inc, aop);
+        for k in 0..3 {
+            assert!(
+                (pqw[k] - pqw2[k]).abs() < 1e-4,
+                "pqw[{k}]: {:.1} vs {:.1}",
+                pqw[k],
+                pqw2[k]
+            );
+        }
+    }
+
+    #[test]
+    fn perifocal_eci_preserves_magnitude() {
+        // Rotation should preserve vector magnitude
+        let pqw: [f64; 3] = [5e6, 3e6, 2e6];
+        let mag_before = (pqw[0] * pqw[0] + pqw[1] * pqw[1] + pqw[2] * pqw[2]).sqrt();
+        let eci = perifocal_to_eci(pqw, 2.1, 1.3, 0.7);
+        let mag_after = (eci[0] * eci[0] + eci[1] * eci[1] + eci[2] * eci[2]).sqrt();
+        assert!(
+            (mag_before - mag_after).abs() < 1e-4,
+            "magnitude not preserved: {mag_before} vs {mag_after}"
         );
     }
 

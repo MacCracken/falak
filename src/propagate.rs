@@ -328,7 +328,13 @@ pub fn encke(
 
         // RK4 on the deviation with proper time offsets for each stage
         let encke_accel_at = |dr_t: [f64; 3], dv_t: [f64; 3], time_offset: f64| -> [f64; 3] {
-            let ref_t = kepler_to_state(elements, mu, t + time_offset).unwrap_or(ref_state.clone());
+            let ref_t = kepler_to_state(elements, mu, t + time_offset).unwrap_or_else(|_| {
+                tracing::warn!(
+                    time = t + time_offset,
+                    "Encke: Kepler solver failed at substep, using stale reference state"
+                );
+                ref_state.clone()
+            });
             let pos_t = [
                 ref_t.position[0] + dr_t[0],
                 ref_t.position[1] + dr_t[1],
