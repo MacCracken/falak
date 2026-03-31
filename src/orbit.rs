@@ -14,7 +14,8 @@ pub struct OrbitalElements {
     /// Semi-major axis (distance units).
     pub semi_major_axis: f64,
 
-    /// Eccentricity (dimensionless, 0 = circular, 0..1 = elliptical).
+    /// Eccentricity (dimensionless, 0 = circular, 0..1 = elliptical,
+    /// 1 = parabolic, >1 = hyperbolic).
     pub eccentricity: f64,
 
     /// Inclination (radians, 0..pi).
@@ -36,8 +37,9 @@ impl OrbitalElements {
     /// # Errors
     ///
     /// Returns [`FalakError::InvalidParameter`] if:
-    /// - `semi_major_axis` is not positive
-    /// - `eccentricity` is not in `[0, 1)` (elliptical orbits only)
+    /// - `eccentricity` is negative
+    /// - `semi_major_axis` is not positive for elliptical/circular orbits (e < 1)
+    /// - `semi_major_axis` is not negative for hyperbolic orbits (e > 1)
     /// - `inclination` is not in `[0, pi]`
     #[must_use = "returns the validated orbital elements"]
     pub fn new(
@@ -48,16 +50,38 @@ impl OrbitalElements {
         argument_of_periapsis: f64,
         true_anomaly: f64,
     ) -> Result<Self> {
-        if semi_major_axis <= 0.0 {
+        if eccentricity < 0.0 {
             return Err(FalakError::InvalidParameter(
-                format!("semi-major axis must be positive, got {semi_major_axis}").into(),
+                format!("eccentricity must be non-negative, got {eccentricity}").into(),
             ));
         }
 
-        if !(0.0..1.0).contains(&eccentricity) {
+        if eccentricity < 1.0 && semi_major_axis <= 0.0 {
             return Err(FalakError::InvalidParameter(
-                format!("eccentricity must be in [0, 1) for elliptical orbits, got {eccentricity}")
-                    .into(),
+                format!(
+                    "semi-major axis must be positive for elliptical orbits, got {semi_major_axis}"
+                )
+                .into(),
+            ));
+        }
+
+        if eccentricity > 1.0 && semi_major_axis >= 0.0 {
+            return Err(FalakError::InvalidParameter(
+                format!(
+                    "semi-major axis must be negative for hyperbolic orbits, got {semi_major_axis}"
+                )
+                .into(),
+            ));
+        }
+
+        // Parabolic: e == 1, a is not meaningful (use semi-latus rectum p instead)
+        // We accept any finite a for parabolic and store p as semi_major_axis by convention.
+        if eccentricity == 1.0 && semi_major_axis <= 0.0 {
+            return Err(FalakError::InvalidParameter(
+                format!(
+                    "semi-latus rectum (stored as semi_major_axis) must be positive for parabolic orbits, got {semi_major_axis}"
+                )
+                .into(),
             ));
         }
 
@@ -78,24 +102,62 @@ impl OrbitalElements {
     }
 
     /// Periapsis distance (closest approach).
+    ///
+    /// For hyperbolic orbits (a < 0), returns |a| × (1 − e) which is negative
+    /// of the standard a(1−e) but positive in magnitude since both a and (1−e) are negative.
     #[must_use]
     #[inline]
     pub fn periapsis(&self) -> f64 {
-        self.semi_major_axis * (1.0 - self.eccentricity)
+        self.semi_major_axis.abs() * (1.0 - self.eccentricity).abs()
     }
 
     /// Apoapsis distance (farthest point).
+    ///
+    /// Only meaningful for elliptical orbits (e < 1).
+    /// Returns `f64::INFINITY` for parabolic and hyperbolic orbits.
     #[must_use]
     #[inline]
     pub fn apoapsis(&self) -> f64 {
-        self.semi_major_axis * (1.0 + self.eccentricity)
+        if self.eccentricity >= 1.0 {
+            f64::INFINITY
+        } else {
+            self.semi_major_axis * (1.0 + self.eccentricity)
+        }
     }
 
-    /// Semi-latus rectum (p = a * (1 - e^2)).
+    /// Semi-latus rectum (p = |a| × |1 − e²|).
     #[must_use]
     #[inline]
     pub fn semi_latus_rectum(&self) -> f64 {
-        self.semi_major_axis * (1.0 - self.eccentricity * self.eccentricity)
+        self.semi_major_axis.abs() * (1.0 - self.eccentricity * self.eccentricity).abs()
+    }
+
+    /// Whether this orbit is elliptical (e < 1).
+    #[must_use]
+    #[inline]
+    pub fn is_elliptical(&self) -> bool {
+        self.eccentricity < 1.0
+    }
+
+    /// Whether this orbit is circular (e ≈ 0).
+    #[must_use]
+    #[inline]
+    pub fn is_circular(&self) -> bool {
+        self.eccentricity < 1e-10
+    }
+
+    /// Whether this orbit is parabolic (e = 1).
+    #[must_use]
+    #[inline]
+    pub fn is_parabolic(&self) -> bool {
+        (self.eccentricity - 1.0).abs() < 1e-10
+    }
+
+    /// Whether this orbit is hyperbolic (e > 1).
+    #[must_use]
+    #[inline]
+    pub fn is_hyperbolic(&self) -> bool {
+        self.eccentricity > 1.0
     }
 }
 
@@ -104,33 +166,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid_orbit() {
+    fn valid_elliptical() {
         let orbit = OrbitalElements::new(7000.0e3, 0.01, 0.9, 1.0, 0.5, 0.0);
         assert!(orbit.is_ok());
+        assert!(orbit.unwrap().is_elliptical());
     }
 
     #[test]
-    fn negative_sma_rejected() {
+    fn valid_hyperbolic() {
+        let orbit = OrbitalElements::new(-10000.0e3, 1.5, 0.5, 0.0, 0.0, 0.5);
+        assert!(orbit.is_ok());
+        assert!(orbit.unwrap().is_hyperbolic());
+    }
+
+    #[test]
+    fn valid_parabolic() {
+        let orbit = OrbitalElements::new(7000.0e3, 1.0, 0.0, 0.0, 0.0, 0.0);
+        assert!(orbit.is_ok());
+        assert!(orbit.unwrap().is_parabolic());
+    }
+
+    #[test]
+    fn negative_sma_rejected_elliptical() {
         let orbit = OrbitalElements::new(-1.0, 0.5, 0.0, 0.0, 0.0, 0.0);
         assert!(matches!(orbit, Err(FalakError::InvalidParameter(_))));
     }
 
     #[test]
-    fn eccentricity_out_of_range() {
-        let orbit = OrbitalElements::new(7000.0e3, 1.5, 0.0, 0.0, 0.0, 0.0);
+    fn positive_sma_rejected_hyperbolic() {
+        let orbit = OrbitalElements::new(1000.0, 1.5, 0.0, 0.0, 0.0, 0.0);
         assert!(matches!(orbit, Err(FalakError::InvalidParameter(_))));
     }
 
     #[test]
-    fn periapsis_apoapsis() {
+    fn negative_eccentricity_rejected() {
+        let orbit = OrbitalElements::new(7000.0e3, -0.1, 0.0, 0.0, 0.0, 0.0);
+        assert!(matches!(orbit, Err(FalakError::InvalidParameter(_))));
+    }
+
+    #[test]
+    fn periapsis_apoapsis_elliptical() {
         let orbit = OrbitalElements::new(10000.0, 0.5, 0.0, 0.0, 0.0, 0.0).unwrap();
         assert!((orbit.periapsis() - 5000.0).abs() < 1e-10);
         assert!((orbit.apoapsis() - 15000.0).abs() < 1e-10);
     }
 
     #[test]
+    fn apoapsis_hyperbolic_infinite() {
+        let orbit = OrbitalElements::new(-10000.0, 1.5, 0.0, 0.0, 0.0, 0.0).unwrap();
+        assert!(orbit.apoapsis().is_infinite());
+        assert!(orbit.periapsis() > 0.0);
+    }
+
+    #[test]
     fn semi_latus_rectum() {
         let orbit = OrbitalElements::new(10000.0, 0.5, 0.0, 0.0, 0.0, 0.0).unwrap();
         assert!((orbit.semi_latus_rectum() - 7500.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn orbit_type_queries() {
+        let circ = OrbitalElements::new(7000.0, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap();
+        assert!(circ.is_circular());
+        assert!(circ.is_elliptical());
+        assert!(!circ.is_hyperbolic());
+        assert!(!circ.is_parabolic());
     }
 }

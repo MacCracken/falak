@@ -17,8 +17,10 @@
 //! - [`bridge`] — Cross-crate conversions (tara/impetus/badal)
 //! - [`integration`] — Downstream consumer APIs (soorat rendering)
 //!
+//! - [`transfer`] — Hohmann, bi-elliptic, plane change, phasing maneuvers
+//!
 //! ### Stubs (not yet implemented)
-//! - [`transfer`], [`perturbation`], [`nbody`], [`ephemeris`], [`frame`], [`maneuver`]
+//! - [`perturbation`], [`nbody`], [`ephemeris`], [`frame`], [`maneuver`]
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
@@ -33,7 +35,7 @@ pub mod orbit;
 /// state vector ↔ orbital elements conversion.
 pub mod kepler;
 
-/// Orbital transfer maneuvers (stub — not yet implemented).
+/// Orbital transfer maneuvers — Hohmann, bi-elliptic, plane change, phasing.
 pub mod transfer;
 
 /// Orbital perturbations (stub — not yet implemented).

@@ -58,6 +58,32 @@ fn state_vector_roundtrip(c: &mut Criterion) {
     });
 }
 
+fn transfer_functions(c: &mut Criterion) {
+    let mu = 3.986_004_418e14;
+    let r_leo = 6.671e6;
+    let r_geo = 42_164.0e3;
+
+    c.bench_function("hohmann(LEO→GEO)", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::transfer::hohmann(r_leo, r_geo, mu));
+        });
+    });
+
+    c.bench_function("bi_elliptic", |b| {
+        b.iter(|| {
+            let _ =
+                std::hint::black_box(falak::transfer::bi_elliptic(r_leo, r_geo, r_geo * 3.0, mu));
+        });
+    });
+
+    c.bench_function("plane_change", |b| {
+        b.iter(|| {
+            let _ =
+                std::hint::black_box(falak::transfer::plane_change(7700.0, 0.5_f64.to_radians()));
+        });
+    });
+}
+
 fn bridge_functions(c: &mut Criterion) {
     c.bench_function("stellar_mass_to_mu", |b| {
         b.iter(|| {
@@ -83,6 +109,7 @@ criterion_group!(
     kepler_hyperbolic,
     anomaly_conversions,
     state_vector_roundtrip,
+    transfer_functions,
     bridge_functions,
 );
 criterion_main!(benches);

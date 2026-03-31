@@ -488,15 +488,21 @@ pub fn state_to_elements(state: &StateVector, mu: f64) -> Result<crate::orbit::O
         }
     };
 
-    // Use internal constructor bypass for e >= 1 (hyperbolic/parabolic)
-    // since OrbitalElements::new only accepts e < 1
-    Ok(crate::orbit::OrbitalElements {
+    crate::orbit::OrbitalElements::new(
         semi_major_axis,
         eccentricity,
         inclination,
         raan,
         argument_of_periapsis,
         true_anomaly,
+    )
+    .map_err(|_| {
+        FalakError::InvalidParameter(
+            format!(
+                "state vector produced invalid elements: a={semi_major_axis}, e={eccentricity}"
+            )
+            .into(),
+        )
     })
 }
 
