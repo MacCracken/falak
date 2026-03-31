@@ -310,48 +310,57 @@ pub fn step_rk4(system: &mut System, dt: f64) {
 /// # Returns
 ///
 /// `(actual_dt, next_suggested_dt)`.
+#[must_use]
 pub fn step_adaptive(system: &mut System, dt: f64, tolerance: f64) -> (f64, f64) {
     let n = system.bodies.len();
-    let pos0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.position).collect();
-    let vel0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+    let mut current_dt = dt;
 
-    // Full step with RK4
-    let mut full_sys = system.clone();
-    step_rk4(&mut full_sys, dt);
+    // Iterative step reduction (max 30 halvings: dt/2^30 ≈ 1e-9 × dt)
+    for _ in 0..30 {
+        let pos0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.position).collect();
+        let vel0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
 
-    // Two half steps with RK4
-    step_rk4(system, dt / 2.0);
-    step_rk4(system, dt / 2.0);
+        // Full step with RK4
+        let mut full_sys = system.clone();
+        step_rk4(&mut full_sys, current_dt);
 
-    // Error estimate: max position difference
-    let mut max_err: f64 = 0.0;
-    for i in 0..n {
-        for j in 0..3 {
-            let err = (system.bodies[i].position[j] - full_sys.bodies[i].position[j]).abs();
-            max_err = max_err.max(err);
+        // Two half steps with RK4
+        step_rk4(system, current_dt / 2.0);
+        step_rk4(system, current_dt / 2.0);
+
+        // Error estimate: max position difference
+        let mut max_err: f64 = 0.0;
+        for i in 0..n {
+            for j in 0..3 {
+                let err = (system.bodies[i].position[j] - full_sys.bodies[i].position[j]).abs();
+                max_err = max_err.max(err);
+            }
         }
-    }
 
-    // Reject if error exceeds tolerance
-    if max_err > tolerance && dt > 1e-6 {
+        if max_err <= tolerance || current_dt <= 1e-6 {
+            // Accept — two-half-step result is already in system
+            let safety = 0.9;
+            let next_dt = if max_err > 1e-30 {
+                safety * current_dt * (tolerance / max_err).powf(0.2)
+            } else {
+                current_dt * 2.0
+            };
+            return (
+                current_dt,
+                next_dt.clamp(current_dt * 0.1, current_dt * 2.0),
+            );
+        }
+
+        // Reject — restore and halve
         for i in 0..n {
             system.bodies[i].position = pos0[i];
             system.bodies[i].velocity = vel0[i];
         }
-        return step_adaptive(system, dt * 0.5, tolerance);
+        current_dt *= 0.5;
     }
 
-    // The two-half-step result (already in system) is more accurate
-
-    // Suggest next step size (5th-order scaling for RK4)
-    let safety = 0.9;
-    let next_dt = if max_err > 1e-30 {
-        safety * dt * (tolerance / max_err).powf(0.2)
-    } else {
-        dt * 2.0
-    };
-
-    (dt, next_dt.clamp(dt * 0.1, dt * 2.0))
+    // Fallback: accept whatever we have at minimum dt
+    (current_dt, current_dt)
 }
 
 // ── Multi-step integration ────────────────────────────────────────────────

@@ -317,10 +317,9 @@ pub fn encke(
             da[i] = a_perturb[i] - mu / r_ref_3 * (dr[i] + fq * ref_state.position[i]);
         }
 
-        // RK4 on the deviation
-        encke_rk4_step(&mut dr, &mut dv, &da, step_dt, |dr_t, dv_t| {
-            let ref_t =
-                kepler_to_state(elements, mu, t + step_dt * 0.5).unwrap_or(ref_state.clone());
+        // RK4 on the deviation with proper time offsets for each stage
+        let encke_accel_at = |dr_t: [f64; 3], dv_t: [f64; 3], time_offset: f64| -> [f64; 3] {
+            let ref_t = kepler_to_state(elements, mu, t + time_offset).unwrap_or(ref_state.clone());
             let pos_t = [
                 ref_t.position[0] + dr_t[0],
                 ref_t.position[1] + dr_t[1],
@@ -340,13 +339,63 @@ pub fn encke(
             let r_ref_sq_t =
                 ref_t.position[0].powi(2) + ref_t.position[1].powi(2) + ref_t.position[2].powi(2);
             let r_ref_3_t = r_ref_sq_t * r_ref_sq_t.sqrt();
-            let ap = perturbation(pos_t, vel_t, t + step_dt * 0.5);
+            let ap = perturbation(pos_t, vel_t, t + time_offset);
             let mut a = [0.0; 3];
             for i in 0..3 {
                 a[i] = ap[i] - mu / r_ref_3_t * (dr_t[i] + fq_t * ref_t.position[i]);
             }
             a
-        });
+        };
+
+        // RK4 stages with correct time offsets
+        let k1v = da;
+        let k1x = dv;
+
+        let half_dt = step_dt * 0.5;
+        let dr2 = [
+            dr[0] + half_dt * k1x[0],
+            dr[1] + half_dt * k1x[1],
+            dr[2] + half_dt * k1x[2],
+        ];
+        let dv2 = [
+            dv[0] + half_dt * k1v[0],
+            dv[1] + half_dt * k1v[1],
+            dv[2] + half_dt * k1v[2],
+        ];
+        let k2v = encke_accel_at(dr2, dv2, half_dt);
+        let k2x = dv2;
+
+        let dr3 = [
+            dr[0] + half_dt * k2x[0],
+            dr[1] + half_dt * k2x[1],
+            dr[2] + half_dt * k2x[2],
+        ];
+        let dv3 = [
+            dv[0] + half_dt * k2v[0],
+            dv[1] + half_dt * k2v[1],
+            dv[2] + half_dt * k2v[2],
+        ];
+        let k3v = encke_accel_at(dr3, dv3, half_dt);
+        let k3x = dv3;
+
+        let dr4 = [
+            dr[0] + step_dt * k3x[0],
+            dr[1] + step_dt * k3x[1],
+            dr[2] + step_dt * k3x[2],
+        ];
+        let dv4 = [
+            dv[0] + step_dt * k3v[0],
+            dv[1] + step_dt * k3v[1],
+            dv[2] + step_dt * k3v[2],
+        ];
+        let k4v = encke_accel_at(dr4, dv4, step_dt); // k4 at full step
+        let k4x = dv4;
+
+        let dt6 = step_dt / 6.0;
+        for i in 0..3 {
+            dr[i] += dt6 * (k1x[i] + 2.0 * k2x[i] + 2.0 * k3x[i] + k4x[i]);
+            dv[i] += dt6 * (k1v[i] + 2.0 * k2v[i] + 2.0 * k3v[i] + k4v[i]);
+        }
 
         t += step_dt;
     }
@@ -365,63 +414,6 @@ pub fn encke(
             ref_final.velocity[2] + dv[2],
         ],
     })
-}
-
-/// Simplified RK4 step for Encke deviation integration.
-fn encke_rk4_step(
-    dr: &mut [f64; 3],
-    dv: &mut [f64; 3],
-    da0: &[f64; 3],
-    dt: f64,
-    mid_accel: impl Fn([f64; 3], [f64; 3]) -> [f64; 3],
-) {
-    let k1v = *da0;
-    let k1x = *dv;
-
-    let dr2 = [
-        dr[0] + 0.5 * dt * k1x[0],
-        dr[1] + 0.5 * dt * k1x[1],
-        dr[2] + 0.5 * dt * k1x[2],
-    ];
-    let dv2 = [
-        dv[0] + 0.5 * dt * k1v[0],
-        dv[1] + 0.5 * dt * k1v[1],
-        dv[2] + 0.5 * dt * k1v[2],
-    ];
-    let k2v = mid_accel(dr2, dv2);
-    let k2x = dv2;
-
-    let dr3 = [
-        dr[0] + 0.5 * dt * k2x[0],
-        dr[1] + 0.5 * dt * k2x[1],
-        dr[2] + 0.5 * dt * k2x[2],
-    ];
-    let dv3 = [
-        dv[0] + 0.5 * dt * k2v[0],
-        dv[1] + 0.5 * dt * k2v[1],
-        dv[2] + 0.5 * dt * k2v[2],
-    ];
-    let k3v = mid_accel(dr3, dv3);
-    let k3x = dv3;
-
-    let dr4 = [
-        dr[0] + dt * k3x[0],
-        dr[1] + dt * k3x[1],
-        dr[2] + dt * k3x[2],
-    ];
-    let dv4 = [
-        dv[0] + dt * k3v[0],
-        dv[1] + dt * k3v[1],
-        dv[2] + dt * k3v[2],
-    ];
-    let k4v = mid_accel(dr4, dv4);
-    let k4x = dv4;
-
-    let dt6 = dt / 6.0;
-    for i in 0..3 {
-        dr[i] += dt6 * (k1x[i] + 2.0 * k2x[i] + 2.0 * k3x[i] + k4x[i]);
-        dv[i] += dt6 * (k1v[i] + 2.0 * k2v[i] + 2.0 * k3v[i] + k4v[i]);
-    }
 }
 
 #[cfg(test)]

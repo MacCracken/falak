@@ -238,22 +238,45 @@ pub fn planetary_position(planet: Planet, jd: f64) -> PlanetaryPosition {
     let t = julian_centuries_since_j2000(jd);
 
     // Orbital elements at epoch + secular rates (simplified)
-    // Format: (L0, L_rate, a_AU, e0, e_rate, i0)
-    // L = mean longitude (deg), a = semi-major axis (AU), e = eccentricity, i = inclination (deg)
-    let (l0, l_rate, a, e0, e_rate, _i0) = match planet {
-        Planet::Mercury => (252.251, 149472.675, 0.387_098, 0.205_630, 0.000_02, 7.005),
-        Planet::Venus => (181.980, 58517.816, 0.723_332, 0.006_773, -0.000_05, 3.395),
-        Planet::Earth => (100.464, 35999.373, 1.000_000, 0.016_709, -0.000_04, 0.000),
-        Planet::Mars => (355.433, 19140.299, 1.523_688, 0.093_405, 0.000_09, 1.850),
-        Planet::Jupiter => (34.351, 3034.906, 5.202_561, 0.048_498, 0.000_16, 1.303),
-        Planet::Saturn => (50.077, 1222.114, 9.554_909, 0.055_509, -0.000_35, 2.489),
+    // Format: (L0, L_rate, lon_peri0, lon_peri_rate, a_AU, e0, e_rate)
+    // L = mean longitude (deg), ϖ = longitude of perihelion (deg)
+    let (l0, l_rate, wp0, wp_rate, a, e0, e_rate) = match planet {
+        Planet::Mercury => (
+            252.251,
+            149_472.675,
+            77.456,
+            0.160,
+            0.387_098,
+            0.205_630,
+            0.000_02,
+        ),
+        Planet::Venus => (
+            181.980, 58_517.816, 131.564, 0.009, 0.723_332, 0.006_773, -0.000_05,
+        ),
+        Planet::Earth => (
+            100.464, 35_999.373, 102.937, 0.032, 1.000_000, 0.016_709, -0.000_04,
+        ),
+        Planet::Mars => (
+            355.433, 19_140.299, 336.060, 0.443, 1.523_688, 0.093_405, 0.000_09,
+        ),
+        Planet::Jupiter => (
+            34.351, 3_034.906, 14.331, 0.216, 5.202_561, 0.048_498, 0.000_16,
+        ),
+        Planet::Saturn => (
+            50.077, 1_222.114, 93.057, 0.891, 9.554_909, 0.055_509, -0.000_35,
+        ),
     };
 
-    let mean_lon = (l0 + l_rate * t).to_radians();
+    let mean_lon_deg = l0 + l_rate * t;
+    let lon_peri_deg = wp0 + wp_rate * t;
     let ecc = e0 + e_rate * t;
 
-    // Solve Kepler's equation (simple iteration for low-e planets)
-    let m = mean_lon.rem_euclid(std::f64::consts::TAU);
+    // Mean anomaly M = L - ϖ
+    let m = (mean_lon_deg - lon_peri_deg)
+        .to_radians()
+        .rem_euclid(std::f64::consts::TAU);
+
+    // Solve Kepler's equation
     let mut ea = m + ecc * m.sin();
     for _ in 0..10 {
         let f = ea - ecc * ea.sin() - m;
@@ -271,8 +294,8 @@ pub fn planetary_position(planet: Planet, jd: f64) -> PlanetaryPosition {
     // Heliocentric distance
     let distance = a * (1.0 - ecc * ea.cos());
 
-    // Ecliptic longitude (simplified: longitude of perihelion + true anomaly)
-    let longitude = (mean_lon - m + nu).rem_euclid(std::f64::consts::TAU);
+    // Ecliptic longitude = longitude of perihelion + true anomaly
+    let longitude = (lon_peri_deg.to_radians() + nu).rem_euclid(std::f64::consts::TAU);
 
     PlanetaryPosition {
         longitude,

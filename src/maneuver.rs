@@ -75,34 +75,49 @@ pub struct ScheduledBurn {
 pub struct ManeuverPlan {
     /// Ordered sequence of burns (sorted by time).
     pub burns: Vec<ScheduledBurn>,
-    /// Total delta-v budget (m/s).
-    pub total_delta_v: f64,
-    /// Total time span from first to last burn (seconds).
-    pub total_time: f64,
 }
 
 impl ManeuverPlan {
     /// Create a new empty maneuver plan.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            burns: Vec::new(),
-            total_delta_v: 0.0,
-            total_time: 0.0,
-        }
+        Self { burns: Vec::new() }
     }
 
     /// Add a burn at a given time offset. Burns are kept sorted by time.
     pub fn add_burn(&mut self, time: f64, burn: ImpulsiveBurn) {
-        self.total_delta_v += burn.magnitude;
-        self.burns.push(ScheduledBurn { time, burn });
-        self.burns.sort_by(|a, b| {
-            a.time
-                .partial_cmp(&b.time)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        if let (Some(first), Some(last)) = (self.burns.first(), self.burns.last()) {
-            self.total_time = last.time - first.time;
+        let idx = self
+            .burns
+            .binary_search_by(|b| {
+                b.time
+                    .partial_cmp(&time)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or_else(|i| i);
+        self.burns.insert(idx, ScheduledBurn { time, burn });
+    }
+
+    /// Remove a burn by index. Returns the removed burn.
+    pub fn remove_burn(&mut self, index: usize) -> Option<ScheduledBurn> {
+        if index < self.burns.len() {
+            Some(self.burns.remove(index))
+        } else {
+            None
+        }
+    }
+
+    /// Total delta-v budget (m/s).
+    #[must_use]
+    pub fn total_delta_v(&self) -> f64 {
+        self.burns.iter().map(|b| b.burn.magnitude).sum()
+    }
+
+    /// Total time span from first to last burn (seconds).
+    #[must_use]
+    pub fn total_time(&self) -> f64 {
+        match (self.burns.first(), self.burns.last()) {
+            (Some(first), Some(last)) => last.time - first.time,
+            _ => 0.0,
         }
     }
 
@@ -296,7 +311,8 @@ mod tests {
         let plan = ManeuverPlan::new();
         assert!(plan.is_empty());
         assert_eq!(plan.len(), 0);
-        assert!((plan.total_delta_v).abs() < 1e-15);
+        assert!(plan.total_delta_v() < 1e-15);
+        assert!(plan.total_time() < 1e-15);
     }
 
     #[test]
@@ -305,8 +321,8 @@ mod tests {
         plan.add_burn(0.0, ImpulsiveBurn::prograde(100.0));
         plan.add_burn(3600.0, ImpulsiveBurn::prograde(200.0));
         assert_eq!(plan.len(), 2);
-        assert!((plan.total_delta_v - 300.0).abs() < 1e-10);
-        assert!((plan.total_time - 3600.0).abs() < 1e-10);
+        assert!((plan.total_delta_v() - 300.0).abs() < 1e-10);
+        assert!((plan.total_time() - 3600.0).abs() < 1e-10);
     }
 
     #[test]
@@ -318,6 +334,18 @@ mod tests {
         assert!((plan.burns[0].time - 100.0).abs() < 1e-10);
         assert!((plan.burns[1].time - 200.0).abs() < 1e-10);
         assert!((plan.burns[2].time - 300.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn plan_remove_burn() {
+        let mut plan = ManeuverPlan::new();
+        plan.add_burn(0.0, ImpulsiveBurn::prograde(100.0));
+        plan.add_burn(100.0, ImpulsiveBurn::prograde(200.0));
+        assert!((plan.total_delta_v() - 300.0).abs() < 1e-10);
+
+        plan.remove_burn(0);
+        assert_eq!(plan.len(), 1);
+        assert!((plan.total_delta_v() - 200.0).abs() < 1e-10);
     }
 
     #[test]
