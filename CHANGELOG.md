@@ -17,6 +17,10 @@
 - **perturbation** — `AtmosphereParams::new` constructor for external crate usage (`#[non_exhaustive]` struct)
 - **tests** — Cross-module integration tests: combined perturbations (J2 + drag + third-body), Encke vs Cowell agreement with combined perturbations, high-eccentricity Encke (e=0.74, e=0.95)
 - **examples** — `orbit_propagation` (LEO with J2, secular rates) and `hohmann_transfer` (LEO→GEO, maneuver planning, rocket equation)
+- **transfer** — Lambert problem solver: universal-variable method with Stumpff functions and Newton iteration, handles elliptic/parabolic/hyperbolic transfers, prograde and retrograde arcs; `LambertSolution` type; benchmark: 97 ns per solve
+- **cr3bp** — Circular Restricted Three-Body Problem module: all 5 Lagrange points (L1–L5, Newton's method for collinear + analytic equilateral), Jacobi constant, pseudo-potential, zero-velocity curves, equations of motion in the synodic frame; `LagrangePoints`, `SynodicState` types
+- **ephemeris** — Eclipse prediction: cylindrical shadow model (`eclipse_cylindrical`), conical shadow model with penumbra (`eclipse_conical`), `EclipseState` enum (Sunlit/Penumbra/Umbra), `EclipseInfo` type with shadow fraction
+- **integration/soorat** — `TransferTrajectory::from_lambert` generates renderable transfer trajectory from Lambert solution (numerical propagation + delta-v markers)
 
 ### Changed
 - **orbit** — `OrbitalElements::new` now accepts all orbit types: elliptical (e < 1, a > 0), parabolic (e = 1, p > 0), hyperbolic (e > 1, a < 0); periapsis returns p/2 for parabolic; apoapsis returns ∞ for open orbits

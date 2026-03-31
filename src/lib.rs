@@ -27,6 +27,7 @@
 //!
 //! - [`nbody`] — N-body gravitational simulation with leapfrog and RK4 integrators
 //! - [`propagate`] — Orbit propagation: analytic two-body and perturbed Cowell's method
+//! - [`cr3bp`] — Circular Restricted Three-Body Problem: Lagrange points, Jacobi constant
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
@@ -62,6 +63,10 @@ pub mod maneuver;
 
 /// Orbit propagation — two-body (Kepler) and perturbed (Cowell's method).
 pub mod propagate;
+
+/// Circular Restricted Three-Body Problem — Lagrange points, Jacobi constant,
+/// zero-velocity curves, equations of motion in the rotating frame.
+pub mod cr3bp;
 
 /// Structured logging for falak via `FALAK_LOG` env var.
 #[cfg(feature = "logging")]

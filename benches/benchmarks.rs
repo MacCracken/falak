@@ -82,6 +82,16 @@ fn transfer_functions(c: &mut Criterion) {
                 std::hint::black_box(falak::transfer::plane_change(7700.0, 0.5_f64.to_radians()));
         });
     });
+
+    c.bench_function("lambert(90°)", |b| {
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [0.0, 7e6, 0.0];
+        let period = falak::kepler::orbital_period(7e6, mu).unwrap();
+        let tof = period / 4.0;
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::transfer::lambert(r1, r2, tof, mu, true));
+        });
+    });
 }
 
 fn frame_transforms(c: &mut Criterion) {

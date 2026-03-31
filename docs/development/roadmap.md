@@ -19,15 +19,15 @@ Falak does NOT own:
 
 ### N-Body Simulation — Extended
 - [ ] Barnes-Hut tree approximation for large N
-- [ ] Restricted three-body problem (Lagrange points)
+- [x] Restricted three-body problem (Lagrange points)
 
 ### Ephemeris — Extended
 - [ ] Rise/set/transit times
-- [ ] Eclipse prediction
+- [x] Eclipse prediction
 - [ ] Precession and nutation corrections
 
 ### Transfer Maneuvers — Extended
-- [ ] Lambert problem solver (given two positions and time)
+- [x] Lambert problem solver (given two positions and time)
 - [ ] Combined plane change + altitude maneuvers
 
 ### Maneuver Planning — Extended
@@ -39,7 +39,7 @@ Falak does NOT own:
 - [ ] **badal bridge**: additional climate coupling parameters
 
 ### Soorat Integration — Extended
-- [ ] Transfer trajectory generation from Hohmann/Lambert results
+- [x] Transfer trajectory generation from Hohmann/Lambert results
 
 ## Future (demand-gated)
 

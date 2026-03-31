@@ -411,6 +411,210 @@ pub fn lunar_to_cartesian_metres(pos: &LunarPosition) -> [f64; 3] {
     ]
 }
 
+// ── Eclipse prediction ───────────────────────────────────────────────────
+
+/// Eclipse illumination state of a satellite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum EclipseState {
+    /// Fully illuminated by the Sun.
+    Sunlit,
+    /// In the penumbral shadow (partial illumination).
+    Penumbra,
+    /// In the umbral shadow (no direct sunlight).
+    Umbra,
+}
+
+/// Result of an eclipse check.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct EclipseInfo {
+    /// Current eclipse state.
+    pub state: EclipseState,
+    /// Shadow fraction: 0.0 = fully sunlit, 1.0 = full umbra.
+    /// Values between 0 and 1 indicate penumbra.
+    pub shadow_fraction: f64,
+}
+
+/// Check whether a satellite is in eclipse using a cylindrical shadow model.
+///
+/// The cylindrical model assumes the shadow is a cylinder of radius equal to
+/// the occulting body's radius, cast in the anti-Sun direction. Simple and
+/// fast; suitable for LEO/MEO eclipse estimation.
+///
+/// # Arguments
+///
+/// * `sat_pos` — Satellite position `[x, y, z]` (metres, ECI or body-centred inertial)
+/// * `sun_pos` — Sun position `[x, y, z]` (metres, same frame)
+/// * `body_radius` — Radius of the occulting body (metres)
+///
+/// # Returns
+///
+/// [`EclipseInfo`] with the eclipse state and shadow fraction.
+#[must_use]
+pub fn eclipse_cylindrical(sat_pos: [f64; 3], sun_pos: [f64; 3], body_radius: f64) -> EclipseInfo {
+    // Unit vector from body centre toward the Sun
+    let sun_mag =
+        (sun_pos[0] * sun_pos[0] + sun_pos[1] * sun_pos[1] + sun_pos[2] * sun_pos[2]).sqrt();
+    if sun_mag < 1e-10 {
+        return EclipseInfo {
+            state: EclipseState::Sunlit,
+            shadow_fraction: 0.0,
+        };
+    }
+    let sun_hat = [
+        sun_pos[0] / sun_mag,
+        sun_pos[1] / sun_mag,
+        sun_pos[2] / sun_mag,
+    ];
+
+    // Project satellite position onto Sun direction
+    let sat_dot_sun = sat_pos[0] * sun_hat[0] + sat_pos[1] * sun_hat[1] + sat_pos[2] * sun_hat[2];
+
+    // If satellite is on the Sun side of the body, it's sunlit
+    if sat_dot_sun > 0.0 {
+        return EclipseInfo {
+            state: EclipseState::Sunlit,
+            shadow_fraction: 0.0,
+        };
+    }
+
+    // Perpendicular distance from satellite to the Sun-body line
+    let perp = [
+        sat_pos[0] - sat_dot_sun * sun_hat[0],
+        sat_pos[1] - sat_dot_sun * sun_hat[1],
+        sat_pos[2] - sat_dot_sun * sun_hat[2],
+    ];
+    let perp_dist = (perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2]).sqrt();
+
+    if perp_dist < body_radius {
+        EclipseInfo {
+            state: EclipseState::Umbra,
+            shadow_fraction: 1.0,
+        }
+    } else {
+        EclipseInfo {
+            state: EclipseState::Sunlit,
+            shadow_fraction: 0.0,
+        }
+    }
+}
+
+/// Check whether a satellite is in eclipse using a conical shadow model.
+///
+/// The conical model accounts for the finite angular sizes of both the Sun
+/// and the occulting body, producing accurate umbra/penumbra boundaries.
+/// More accurate than cylindrical for high-altitude orbits (GEO, cislunar).
+///
+/// # Arguments
+///
+/// * `sat_pos` — Satellite position `[x, y, z]` (metres, body-centred inertial)
+/// * `sun_pos` — Sun position `[x, y, z]` (metres, same frame)
+/// * `body_radius` — Radius of the occulting body (metres)
+/// * `sun_radius` — Radius of the Sun (metres, default 6.957e8)
+#[must_use]
+pub fn eclipse_conical(
+    sat_pos: [f64; 3],
+    sun_pos: [f64; 3],
+    body_radius: f64,
+    sun_radius: f64,
+) -> EclipseInfo {
+    let sat_mag =
+        (sat_pos[0] * sat_pos[0] + sat_pos[1] * sat_pos[1] + sat_pos[2] * sat_pos[2]).sqrt();
+    let sun_mag =
+        (sun_pos[0] * sun_pos[0] + sun_pos[1] * sun_pos[1] + sun_pos[2] * sun_pos[2]).sqrt();
+
+    if sat_mag < 1e-10 || sun_mag < 1e-10 {
+        return EclipseInfo {
+            state: EclipseState::Sunlit,
+            shadow_fraction: 0.0,
+        };
+    }
+
+    // Apparent angular radii as seen from the satellite
+    let theta_body = (body_radius / sat_mag).asin(); // angular radius of occulting body
+    let theta_sun = (sun_radius / sun_mag).asin(); // angular radius of Sun
+
+    // Angle between satellite-to-centre and satellite-to-sun directions
+    // sat_to_sun = sun_pos - sat_pos... no, we want body-sun angle as seen from sat.
+    // The body is at origin. The angle is between -sat_pos (toward body) and
+    // (sun_pos - sat_pos) (toward sun).
+    let to_sun = [
+        sun_pos[0] - sat_pos[0],
+        sun_pos[1] - sat_pos[1],
+        sun_pos[2] - sat_pos[2],
+    ];
+    let to_sun_mag = (to_sun[0] * to_sun[0] + to_sun[1] * to_sun[1] + to_sun[2] * to_sun[2]).sqrt();
+
+    if to_sun_mag < 1e-10 {
+        return EclipseInfo {
+            state: EclipseState::Sunlit,
+            shadow_fraction: 0.0,
+        };
+    }
+
+    // Angle between "toward body centre" and "toward Sun" as seen from satellite
+    let cos_sep = -(sat_pos[0] * to_sun[0] + sat_pos[1] * to_sun[1] + sat_pos[2] * to_sun[2])
+        / (sat_mag * to_sun_mag);
+    let sep = cos_sep.clamp(-1.0, 1.0).acos();
+
+    if sep > theta_body + theta_sun {
+        // No overlap — fully sunlit
+        EclipseInfo {
+            state: EclipseState::Sunlit,
+            shadow_fraction: 0.0,
+        }
+    } else if sep < theta_body - theta_sun && theta_body > theta_sun {
+        // Sun fully behind body — total eclipse (umbra)
+        EclipseInfo {
+            state: EclipseState::Umbra,
+            shadow_fraction: 1.0,
+        }
+    } else if sep < theta_sun - theta_body && theta_sun > theta_body {
+        // Body in front of Sun but smaller — annular eclipse
+        // Shadow fraction is the area ratio
+        let frac = (theta_body / theta_sun).powi(2);
+        EclipseInfo {
+            state: EclipseState::Penumbra,
+            shadow_fraction: frac,
+        }
+    } else {
+        // Partial overlap — penumbra
+        // Approximate shadow fraction from overlap geometry
+        let frac = overlap_fraction(sep, theta_body, theta_sun);
+        EclipseInfo {
+            state: EclipseState::Penumbra,
+            shadow_fraction: frac,
+        }
+    }
+}
+
+/// Approximate fractional overlap area of two circles (discs on the sky).
+fn overlap_fraction(sep: f64, r1: f64, r2: f64) -> f64 {
+    if sep >= r1 + r2 {
+        return 0.0;
+    }
+    if sep <= (r1 - r2).abs() {
+        return r1.min(r2).powi(2) / r2.powi(2);
+    }
+
+    // Area of intersection of two circles
+    let d = sep;
+    let cos_a1 = (d * d + r1 * r1 - r2 * r2) / (2.0 * d * r1);
+    let cos_a2 = (d * d + r2 * r2 - r1 * r1) / (2.0 * d * r2);
+    let a1 = cos_a1.clamp(-1.0, 1.0).acos();
+    let a2 = cos_a2.clamp(-1.0, 1.0).acos();
+
+    let overlap = r1 * r1 * (a1 - a1.sin() * a1.cos()) + r2 * r2 * (a2 - a2.sin() * a2.cos());
+    let sun_area = std::f64::consts::PI * r2 * r2;
+
+    if sun_area > 0.0 {
+        (overlap / sun_area).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,6 +892,76 @@ mod tests {
         assert!(
             diff > 2.0,
             "lunar longitude should change over 15 days: {diff} rad"
+        );
+    }
+
+    // ── Eclipse ──────────────────────────────────────────────────────
+
+    const R_EARTH: f64 = 6_378_137.0;
+    const R_SUN: f64 = 6.957e8;
+    const AU: f64 = 1.495_978_707e11;
+
+    #[test]
+    fn eclipse_cylindrical_sunlit() {
+        // Satellite on Sun side of Earth — clearly sunlit
+        let sat = [R_EARTH + 400e3, 0.0, 0.0];
+        let sun = [AU, 0.0, 0.0]; // Sun along +x
+        let info = eclipse_cylindrical(sat, sun, R_EARTH);
+        assert_eq!(info.state, EclipseState::Sunlit);
+        assert!((info.shadow_fraction - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn eclipse_cylindrical_umbra() {
+        // Satellite directly behind Earth (opposite Sun)
+        let sat = [-(R_EARTH + 400e3), 0.0, 0.0];
+        let sun = [AU, 0.0, 0.0];
+        let info = eclipse_cylindrical(sat, sun, R_EARTH);
+        assert_eq!(info.state, EclipseState::Umbra);
+        assert!((info.shadow_fraction - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn eclipse_cylindrical_edge() {
+        // Satellite behind Earth but far off-axis — should be sunlit
+        let sat = [-1e7, R_EARTH * 2.0, 0.0]; // way off to the side
+        let sun = [AU, 0.0, 0.0];
+        let info = eclipse_cylindrical(sat, sun, R_EARTH);
+        assert_eq!(info.state, EclipseState::Sunlit);
+    }
+
+    #[test]
+    fn eclipse_conical_sunlit() {
+        let sat = [R_EARTH + 400e3, 0.0, 0.0];
+        let sun = [AU, 0.0, 0.0];
+        let info = eclipse_conical(sat, sun, R_EARTH, R_SUN);
+        assert_eq!(info.state, EclipseState::Sunlit);
+    }
+
+    #[test]
+    fn eclipse_conical_umbra() {
+        // Satellite directly behind Earth, close enough for umbra
+        let sat = [-(R_EARTH + 400e3), 0.0, 0.0];
+        let sun = [AU, 0.0, 0.0];
+        let info = eclipse_conical(sat, sun, R_EARTH, R_SUN);
+        // At LEO altitude, Earth's angular size > Sun's → full eclipse
+        assert_eq!(info.state, EclipseState::Umbra);
+        assert!((info.shadow_fraction - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn eclipse_conical_geo_shadow() {
+        // At GEO (~42164 km), Earth's shadow is narrower — test that
+        // a satellite directly behind Earth is still in shadow
+        let r_geo = 42_164e3;
+        let sat = [-r_geo, 0.0, 0.0];
+        let sun = [AU, 0.0, 0.0];
+        let info = eclipse_conical(sat, sun, R_EARTH, R_SUN);
+        // At GEO, Earth (angular radius ~8.7°) still bigger than Sun (~0.27°)
+        assert!(
+            info.state == EclipseState::Umbra || info.state == EclipseState::Penumbra,
+            "GEO satellite behind Earth should be eclipsed: {:?}",
+            info.state
         );
     }
 }

@@ -1,4 +1,4 @@
-//! Orbital transfer maneuvers — Hohmann, bi-elliptic, and plane change.
+//! Orbital transfer maneuvers — Hohmann, bi-elliptic, plane change, and Lambert.
 //!
 //! All functions take gravitational parameter μ (m³/s²) and orbit radii (m),
 //! returning delta-v values in m/s and times in seconds.
@@ -230,6 +230,282 @@ pub fn phasing(radius: f64, mu: f64, phase_angle: f64, n_orbits: u32) -> Result<
     Ok((delta_v, t_phase))
 }
 
+// ── Lambert problem ──────────────────────────────────────────────────────
+
+/// Solution to Lambert's problem.
+///
+/// Given two position vectors and a time of flight, the Lambert solver finds
+/// the velocity vectors at departure and arrival that connect them on a
+/// Keplerian arc.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct LambertSolution {
+    /// Departure velocity `[vx, vy, vz]` (m/s, inertial frame).
+    pub v1: [f64; 3],
+    /// Arrival velocity `[vx, vy, vz]` (m/s, inertial frame).
+    pub v2: [f64; 3],
+}
+
+/// Maximum iterations for Lambert solver.
+const LAMBERT_MAX_ITER: u32 = 50;
+
+/// Convergence tolerance for Lambert solver.
+const LAMBERT_TOL: f64 = 1e-12;
+
+/// Solve Lambert's problem: find the transfer orbit connecting two positions
+/// in a given time of flight.
+///
+/// Uses the universal-variable method with Stumpff functions (Bate, Mueller &
+/// White) and Newton iteration on the universal variable *z*. Handles
+/// elliptic, parabolic, and hyperbolic transfers.
+///
+/// # Arguments
+///
+/// * `r1_vec` — Departure position `[x, y, z]` (metres, inertial frame)
+/// * `r2_vec` — Arrival position `[x, y, z]` (metres, inertial frame)
+/// * `tof` — Time of flight (seconds, must be positive)
+/// * `mu` — Gravitational parameter (m³/s²)
+/// * `prograde` — If `true`, use the short-way (prograde) arc; if `false`, use
+///   the long-way (retrograde) arc.
+///
+/// # Errors
+///
+/// Returns [`FalakError::InvalidParameter`] if `tof` or `mu` are not positive,
+/// or if positions are degenerate (zero-length).
+///
+/// Returns [`FalakError::ConvergenceError`] if the solver fails to converge.
+#[must_use = "returns the Lambert solution"]
+#[instrument(level = "debug")]
+pub fn lambert(
+    r1_vec: [f64; 3],
+    r2_vec: [f64; 3],
+    tof: f64,
+    mu: f64,
+    prograde: bool,
+) -> Result<LambertSolution> {
+    validate_positive("tof", tof)?;
+    validate_positive("mu", mu)?;
+
+    let r1 = (r1_vec[0] * r1_vec[0] + r1_vec[1] * r1_vec[1] + r1_vec[2] * r1_vec[2]).sqrt();
+    let r2 = (r2_vec[0] * r2_vec[0] + r2_vec[1] * r2_vec[1] + r2_vec[2] * r2_vec[2]).sqrt();
+
+    if r1 < 1e-10 || r2 < 1e-10 {
+        return Err(FalakError::InvalidParameter(
+            "position vectors must be non-zero".into(),
+        ));
+    }
+
+    // Transfer angle
+    let cos_dnu =
+        (r1_vec[0] * r2_vec[0] + r1_vec[1] * r2_vec[1] + r1_vec[2] * r2_vec[2]) / (r1 * r2);
+    let cos_dnu = cos_dnu.clamp(-1.0, 1.0);
+
+    // Cross product z-component determines direction
+    let cross_z = r1_vec[0] * r2_vec[1] - r1_vec[1] * r2_vec[0];
+
+    let mut dnu = cos_dnu.acos();
+    if prograde {
+        if cross_z < 0.0 {
+            dnu = std::f64::consts::TAU - dnu;
+        }
+    } else if cross_z >= 0.0 {
+        dnu = std::f64::consts::TAU - dnu;
+    }
+
+    // A parameter (Bate, Mueller & White eq 5.35)
+    let sin_dnu = dnu.sin();
+    let a_param = sin_dnu * (r1 * r2 / (1.0 - cos_dnu)).sqrt();
+
+    if a_param.abs() < 1e-30 {
+        return Err(FalakError::InvalidParameter(
+            "degenerate transfer geometry (positions are collinear with 180° transfer)".into(),
+        ));
+    }
+
+    // Newton iteration on universal variable z to match TOF
+    // z > 0 → elliptic, z = 0 → parabolic, z < 0 → hyperbolic
+    let mut z = lambert_initial_z(r1, r2, tof, mu, a_param);
+
+    for iter in 0..LAMBERT_MAX_ITER {
+        let (c2, c3) = stumpff(z);
+        let y = r1 + r2 + a_param * (z * c3 - 1.0) / c2.sqrt();
+
+        if y < 0.0 {
+            // y must be positive; adjust z upward
+            z = z.abs() + 0.1;
+            continue;
+        }
+
+        let x = (y / c2).sqrt();
+        let t_z = (x * x * x * c3 + a_param * y.sqrt()) / mu.sqrt();
+
+        let dt = t_z - tof;
+        if dt.abs() < LAMBERT_TOL * tof.max(1.0) {
+            // Converged — compute velocities
+            return Ok(lambert_solve_velocities(
+                r1_vec, r2_vec, r1, r2, y, a_param, mu, tof,
+            ));
+        }
+
+        // Derivative dT/dz for Newton step
+        let dt_dz = if z.abs() > 1e-10 {
+            let y_dot = (x * x * x * (c2 - 3.0 * c3 / (2.0 * c2))
+                + a_param / (8.0 * c2) * (3.0 * c3 * y.sqrt() / c2 + a_param / y.sqrt()))
+                / mu.sqrt();
+            // Simplified: use finite difference as fallback
+            let h = z.abs() * 1e-7 + 1e-10;
+            let (c2p, c3p) = stumpff(z + h);
+            let yp = r1 + r2 + a_param * ((z + h) * c3p - 1.0) / c2p.sqrt();
+            if yp > 0.0 {
+                let xp = (yp / c2p).sqrt();
+                let t_zp = (xp * xp * xp * c3p + a_param * yp.sqrt()) / mu.sqrt();
+                (t_zp - t_z) / h
+            } else {
+                y_dot
+            }
+        } else {
+            // Near z=0: finite difference
+            let h = 1e-6;
+            let (c2p, c3p) = stumpff(z + h);
+            let yp = r1 + r2 + a_param * ((z + h) * c3p - 1.0) / c2p.sqrt();
+            if yp > 0.0 {
+                let xp = (yp / c2p).sqrt();
+                let t_zp = (xp * xp * xp * c3p + a_param * yp.sqrt()) / mu.sqrt();
+                (t_zp - t_z) / h
+            } else {
+                1.0 // fallback to avoid division by zero
+            }
+        };
+
+        if dt_dz.abs() < 1e-30 {
+            return Err(FalakError::ConvergenceError {
+                message: "Lambert solver: zero derivative".into(),
+                iterations: iter,
+            });
+        }
+
+        z -= dt / dt_dz;
+    }
+
+    Err(FalakError::ConvergenceError {
+        message: format!("Lambert solver did not converge (z={z})").into(),
+        iterations: LAMBERT_MAX_ITER,
+    })
+}
+
+/// Stumpff functions C₂(z) and C₃(z).
+///
+/// C₂(z) = (1 - cos√z)/z     for z > 0
+/// C₃(z) = (√z - sin√z)/√z³  for z > 0
+/// With Taylor series near z = 0 and hyperbolic equivalents for z < 0.
+#[must_use]
+#[inline]
+fn stumpff(z: f64) -> (f64, f64) {
+    if z > 1e-6 {
+        let sz = z.sqrt();
+        let c2 = (1.0 - sz.cos()) / z;
+        let c3 = (sz - sz.sin()) / (z * sz);
+        (c2, c3)
+    } else if z < -1e-6 {
+        let sz = (-z).sqrt();
+        let c2 = (sz.cosh() - 1.0) / (-z);
+        let c3 = (sz.sinh() - sz) / ((-z) * sz);
+        (c2, c3)
+    } else {
+        // Taylor series near z = 0
+        // C2 = 1/2 - z/24 + z²/720 ...
+        // C3 = 1/6 - z/120 + z²/5040 ...
+        let c2 = 1.0 / 2.0 - z / 24.0 + z * z / 720.0;
+        let c3 = 1.0 / 6.0 - z / 120.0 + z * z / 5040.0;
+        (c2, c3)
+    }
+}
+
+/// Initial guess for z based on the transfer geometry.
+fn lambert_initial_z(r1: f64, r2: f64, tof: f64, mu: f64, a_param: f64) -> f64 {
+    // Compute TOF at z=0 (parabolic) to decide direction
+    let (c2_0, c3_0) = stumpff(0.0);
+    let y0 = r1 + r2 + a_param * (0.0 * c3_0 - 1.0) / c2_0.sqrt();
+    if y0 > 0.0 {
+        let x0 = (y0 / c2_0).sqrt();
+        let t0 = (x0 * x0 * x0 * c3_0 + a_param * y0.sqrt()) / mu.sqrt();
+        if t0 > tof {
+            // TOF at z=0 is too long → need hyperbolic (z < 0)
+            // Use bisection to bracket: find z where y > 0 and T < tof
+            let mut z = -0.5;
+            for _ in 0..20 {
+                let (c2, c3) = stumpff(z);
+                let y = r1 + r2 + a_param * (z * c3 - 1.0) / c2.sqrt();
+                if y < 0.0 {
+                    z *= 0.5; // too negative
+                } else {
+                    let xz = (y / c2).sqrt();
+                    let tz = (xz * xz * xz * c3 + a_param * y.sqrt()) / mu.sqrt();
+                    if tz < tof * 0.5 {
+                        z *= 0.5; // overshot
+                    } else {
+                        break;
+                    }
+                }
+                z *= 2.0;
+            }
+            z
+        } else {
+            // TOF at z=0 is too short → need elliptic (z > 0)
+            // Estimate z from target period
+            let period = std::f64::consts::TAU * ((r1 + r2) / 2.0).powi(3).sqrt() / mu.sqrt();
+            let ratio = tof / period.max(1e-10);
+            // z ≈ (2π)² for one orbit; scale by ratio
+            (std::f64::consts::TAU * ratio)
+                .powi(2)
+                .min(4.0 * std::f64::consts::PI * std::f64::consts::PI)
+        }
+    } else {
+        // y0 < 0 means a_param is negative (retrograde/long-way)
+        // Need higher z to make y positive
+        1.0
+    }
+}
+
+/// Compute departure and arrival velocities from the converged Lambert solution.
+#[allow(clippy::too_many_arguments)]
+fn lambert_solve_velocities(
+    r1_vec: [f64; 3],
+    r2_vec: [f64; 3],
+    r1: f64,
+    r2: f64,
+    y: f64,
+    _a_param: f64,
+    mu: f64,
+    _tof: f64,
+) -> LambertSolution {
+    // Lagrange coefficients (BMW eq 5.46)
+    let f = 1.0 - y / r1;
+    let g_dot = 1.0 - y / r2;
+    let g = _a_param * (y / mu).sqrt();
+
+    if g.abs() < 1e-30 {
+        return LambertSolution {
+            v1: [0.0; 3],
+            v2: [0.0; 3],
+        };
+    }
+
+    let g_inv = 1.0 / g;
+    let v1 = [
+        (r2_vec[0] - f * r1_vec[0]) * g_inv,
+        (r2_vec[1] - f * r1_vec[1]) * g_inv,
+        (r2_vec[2] - f * r1_vec[2]) * g_inv,
+    ];
+    let v2 = [
+        (g_dot * r2_vec[0] - r1_vec[0]) * g_inv,
+        (g_dot * r2_vec[1] - r1_vec[1]) * g_inv,
+        (g_dot * r2_vec[2] - r1_vec[2]) * g_inv,
+    ];
+
+    LambertSolution { v1, v2 }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn validate_positive(name: &str, value: f64) -> Result<()> {
@@ -380,5 +656,129 @@ mod tests {
     fn phasing_invalid() {
         assert!(phasing(-1.0, MU_EARTH, 1.0, 1).is_err());
         assert!(phasing(7e6, MU_EARTH, 1.0, 0).is_err());
+    }
+
+    // ── Lambert ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn lambert_recovers_known_orbit() {
+        // Create a known orbit, propagate to get two states, then verify
+        // Lambert recovers the velocities.
+        let elem = crate::orbit::OrbitalElements::new(7e6, 0.1, 0.5, 1.0, 0.5, 0.0).unwrap();
+        let state1 = crate::kepler::elements_to_state(&elem, MU_EARTH).unwrap();
+
+        let dt = 1200.0; // 20 minutes
+        let state2 = crate::propagate::kepler_to_state(&elem, MU_EARTH, dt).unwrap();
+
+        let sol = lambert(state1.position, state2.position, dt, MU_EARTH, true).unwrap();
+
+        // Departure velocity should match state1.velocity
+        for i in 0..3 {
+            let diff = (sol.v1[i] - state1.velocity[i]).abs();
+            assert!(
+                diff < 1.0, // within 1 m/s
+                "v1[{i}]: Lambert={:.3} vs expected={:.3}, diff={diff:.3}",
+                sol.v1[i],
+                state1.velocity[i]
+            );
+        }
+
+        // Arrival velocity should match state2.velocity
+        for i in 0..3 {
+            let diff = (sol.v2[i] - state2.velocity[i]).abs();
+            assert!(
+                diff < 1.0,
+                "v2[{i}]: Lambert={:.3} vs expected={:.3}, diff={diff:.3}",
+                sol.v2[i],
+                state2.velocity[i]
+            );
+        }
+    }
+
+    #[test]
+    fn lambert_circular_orbit() {
+        // Circular equatorial orbit: 90° transfer
+        let r = 7e6;
+        let v_circ = (MU_EARTH / r).sqrt();
+        let r1 = [r, 0.0, 0.0];
+        let r2 = [0.0, r, 0.0]; // 90° ahead
+
+        // TOF for 90° on a circular orbit
+        let period = crate::kepler::orbital_period(r, MU_EARTH).unwrap();
+        let tof = period / 4.0;
+
+        let sol = lambert(r1, r2, tof, MU_EARTH, true).unwrap();
+
+        // Departure velocity should be approximately [0, v_circ, 0]
+        assert!(
+            sol.v1[0].abs() < 100.0,
+            "v1_x should be ~0, got {}",
+            sol.v1[0]
+        );
+        assert!(
+            (sol.v1[1] - v_circ).abs() < 100.0,
+            "v1_y should be ~{v_circ}, got {}",
+            sol.v1[1]
+        );
+    }
+
+    #[test]
+    fn lambert_near_hohmann() {
+        // Verify Lambert gives approximately Hohmann-like delta-v for a
+        // near-180° transfer (exact 180° is degenerate for Lambert).
+        let r1_mag = R_LEO;
+        let r2_mag = R_GEO;
+        // Offset slightly from 180° to avoid collinear degeneracy
+        let angle = 179.0_f64.to_radians();
+        let r1 = [r1_mag, 0.0, 0.0];
+        let r2 = [r2_mag * angle.cos(), r2_mag * angle.sin(), 0.0];
+
+        let h = hohmann(r1_mag, r2_mag, MU_EARTH).unwrap();
+
+        let sol = lambert(r1, r2, h.time_of_flight, MU_EARTH, true).unwrap();
+
+        let v_dep = (sol.v1[0] * sol.v1[0] + sol.v1[1] * sol.v1[1] + sol.v1[2] * sol.v1[2]).sqrt();
+        let v_circ = (MU_EARTH / r1_mag).sqrt();
+        let lambert_dv1 = (v_dep - v_circ).abs();
+
+        // Should be within ~100 m/s of Hohmann (not exact due to geometry offset)
+        assert!(
+            (lambert_dv1 - h.delta_v1).abs() < 100.0,
+            "Lambert Δv1={lambert_dv1:.1} vs Hohmann Δv1={:.1}",
+            h.delta_v1
+        );
+    }
+
+    #[test]
+    fn lambert_invalid_inputs() {
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [0.0, 7e6, 0.0];
+        assert!(lambert(r1, r2, -1.0, MU_EARTH, true).is_err());
+        assert!(lambert(r1, r2, 1000.0, -1.0, true).is_err());
+        assert!(lambert([0.0; 3], r2, 1000.0, MU_EARTH, true).is_err());
+    }
+
+    #[test]
+    fn lambert_retrograde() {
+        // Long-way transfer (retrograde)
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [0.0, 7e6, 0.0];
+        let period = crate::kepler::orbital_period(7e6, MU_EARTH).unwrap();
+        let tof = period * 0.75; // 270° the long way
+
+        let sol = lambert(r1, r2, tof, MU_EARTH, false).unwrap();
+
+        // Should produce finite velocities
+        for i in 0..3 {
+            assert!(sol.v1[i].is_finite(), "v1[{i}] is not finite");
+            assert!(sol.v2[i].is_finite(), "v2[{i}] is not finite");
+        }
+
+        // Speed should be orbital-magnitude
+        let v1_mag = (sol.v1[0] * sol.v1[0] + sol.v1[1] * sol.v1[1] + sol.v1[2] * sol.v1[2]).sqrt();
+        assert!(
+            v1_mag > 1000.0 && v1_mag < 20000.0,
+            "retrograde v1_mag={v1_mag} should be orbital"
+        );
     }
 }

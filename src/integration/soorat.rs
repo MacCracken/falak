@@ -161,6 +161,73 @@ pub struct TransferTrajectory {
     pub transfer_time: f64,
 }
 
+impl TransferTrajectory {
+    /// Generate a transfer trajectory from a Lambert solution.
+    ///
+    /// Propagates the departure state (r1, v1) numerically using Cowell's
+    /// method to produce renderable trajectory points.
+    ///
+    /// # Arguments
+    ///
+    /// * `r1` — Departure position (metres, ECI)
+    /// * `r2` — Arrival position (metres, ECI)
+    /// * `solution` — Lambert solution containing departure/arrival velocities
+    /// * `tof` — Time of flight (seconds)
+    /// * `mu` — Gravitational parameter (m³/s²)
+    /// * `num_points` — Number of trajectory points to generate
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if propagation fails.
+    #[must_use = "returns the computed transfer trajectory"]
+    pub fn from_lambert(
+        r1: [f64; 3],
+        r2: [f64; 3],
+        solution: &crate::transfer::LambertSolution,
+        tof: f64,
+        mu: f64,
+        num_points: usize,
+    ) -> crate::error::Result<Self> {
+        let num_points = num_points.max(2);
+        let dt_seg = tof / (num_points - 1) as f64;
+        let dt_step = dt_seg.min(10.0); // integration step ≤ 10s
+
+        let mut points = Vec::with_capacity(num_points);
+        let mut state = crate::kepler::StateVector {
+            position: r1,
+            velocity: solution.v1,
+        };
+
+        points.push(state.position);
+
+        for i in 1..num_points {
+            let seg_time = dt_seg.min(tof - (i - 1) as f64 * dt_seg);
+            state = crate::propagate::two_body(&state, mu, seg_time, dt_step)?;
+            points.push(state.position);
+        }
+
+        // Compute departure and arrival delta-v magnitudes
+        // (departure relative to circular orbit at r1, arrival relative to circular at r2)
+        let r1_mag = (r1[0] * r1[0] + r1[1] * r1[1] + r1[2] * r1[2]).sqrt();
+        let r2_mag = (r2[0] * r2[0] + r2[1] * r2[1] + r2[2] * r2[2]).sqrt();
+        let v_circ1 = (mu / r1_mag).sqrt();
+        let v_circ2 = (mu / r2_mag).sqrt();
+        let v1_mag =
+            (solution.v1[0].powi(2) + solution.v1[1].powi(2) + solution.v1[2].powi(2)).sqrt();
+        let v2_mag =
+            (solution.v2[0].powi(2) + solution.v2[1].powi(2) + solution.v2[2].powi(2)).sqrt();
+        let dv1 = (v1_mag - v_circ1).abs();
+        let dv2 = (v2_mag - v_circ2).abs();
+
+        Ok(Self {
+            points,
+            burns: vec![(0, dv1), (num_points - 1, dv2)],
+            total_delta_v: dv1 + dv2,
+            transfer_time: tof,
+        })
+    }
+}
+
 // ── Ground track ───────────────────────────────────────────────────────────
 
 /// Ground track for map overlay rendering.
@@ -369,5 +436,35 @@ mod tests {
             orbit_numbers: vec![1, 1],
         };
         assert_eq!(gt.points.len(), 2);
+    }
+
+    #[test]
+    fn transfer_trajectory_from_lambert() {
+        let mu = 3.986_004_418e14;
+        let r1 = [7e6, 0.0, 0.0];
+        let r2 = [0.0, 7e6, 0.0]; // 90° transfer
+        let period = crate::kepler::orbital_period(7e6, mu).unwrap();
+        let tof = period / 4.0;
+
+        let sol = crate::transfer::lambert(r1, r2, tof, mu, true).unwrap();
+        let tt = TransferTrajectory::from_lambert(r1, r2, &sol, tof, mu, 50).unwrap();
+
+        assert_eq!(tt.points.len(), 50);
+        assert_eq!(tt.burns.len(), 2);
+        assert!(tt.total_delta_v > 0.0);
+        assert!((tt.transfer_time - tof).abs() < 1e-6);
+
+        // First point should be near r1
+        let p0 = tt.points[0];
+        assert!((p0[0] - r1[0]).abs() < 1.0);
+
+        // Last point should be near r2
+        let pn = tt.points[49];
+        let dist_to_r2 =
+            ((pn[0] - r2[0]).powi(2) + (pn[1] - r2[1]).powi(2) + (pn[2] - r2[2]).powi(2)).sqrt();
+        assert!(
+            dist_to_r2 < 10_000.0, // within 10 km
+            "last point should be near r2, dist={dist_to_r2:.0} m"
+        );
     }
 }
