@@ -56,10 +56,8 @@ impl OrbitalElements {
 
         if !(0.0..1.0).contains(&eccentricity) {
             return Err(FalakError::InvalidParameter(
-                format!(
-                    "eccentricity must be in [0, 1) for elliptical orbits, got {eccentricity}"
-                )
-                .into(),
+                format!("eccentricity must be in [0, 1) for elliptical orbits, got {eccentricity}")
+                    .into(),
             ));
         }
 

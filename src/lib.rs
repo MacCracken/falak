@@ -22,7 +22,11 @@
 //! - [`frame`] — Reference frames (ECI, ECEF, perifocal, rotating)
 //! - [`maneuver`] — Delta-v budgets, impulsive burns, continuous thrust
 
+/// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
+pub mod bridge;
 pub mod error;
+/// Integration APIs for downstream consumers (soorat rendering).
+pub mod integration;
 
 /// Orbital elements and state vectors.
 pub mod orbit;
