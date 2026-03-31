@@ -12,30 +12,7 @@ Falak does NOT own:
 - **Rendering** --> soorat/kiran (visual display of orbits)
 - **Game logic** --> joshua/kiran (mission scenarios, NPCs)
 
-## Completed
-
-| Phase | Summary |
-|-------|---------|
-| Foundation | Error types, OrbitalElements struct with validation (elliptical/parabolic/hyperbolic) |
-| Keplerian Orbits | Kepler's equation solver (elliptic + hyperbolic), all anomaly conversions, orbital period/mean motion, vis-viva, orbital radius, state vector ↔ elements |
-| Transfer Maneuvers | Hohmann transfer, bi-elliptic transfer, plane change, phasing orbits |
-| Perturbation Models | J2/J3 zonal harmonics, secular J2 rates, atmospheric drag (exponential model), solar radiation pressure, third-body perturbations |
-| Reference Frames | Perifocal ↔ ECI, ECI ↔ ECEF, ECEF ↔ geodetic (WGS-84 Bowring), inertial ↔ rotating (synodic) |
-| Ephemeris | Calendar ↔ Julian Date, MJD, Unix timestamp, GMST (IAU 1982), Julian centuries, day of year |
-| Maneuvers | Impulsive burn types, delta-v budgets, Tsiolkovsky rocket equation, escape/capture delta-v, Oberth effect |
-| Cross-Crate Bridges | Tara (stellar mass → μ, luminosity → HZ), impetus (gravity force, escape energy), badal (insolation, climate variation) |
-| Soorat Integration | OrbitPath from elements, planetary position/transfer/ground track data types |
-| Logging | Feature-gated structured tracing via FALAK_LOG |
-
 ## Backlog
-
-### N-Body Simulation
-- [ ] Direct N-body gravitational computation
-- [ ] Leapfrog / Stormer-Verlet integrator
-- [ ] Runge-Kutta 4/5 (Dormand-Prince) integrator
-- [ ] Symplectic integrators for long-term stability
-- [ ] Barnes-Hut tree approximation for large N
-- [ ] Restricted three-body problem (Lagrange points)
 
 ### Orbit Propagation
 - [ ] Two-body propagation (Kepler problem forward in time)
@@ -43,6 +20,11 @@ Falak does NOT own:
 - [ ] Cowell's method (direct integration of equations of motion)
 - [ ] Encke's method (deviation from reference orbit)
 - [ ] General perturbation theory (osculating → mean elements)
+
+### N-Body Simulation — Extended
+- [ ] Dormand-Prince (RK45) adaptive step integrator
+- [ ] Barnes-Hut tree approximation for large N
+- [ ] Restricted three-body problem (Lagrange points)
 
 ### Ephemeris — Extended
 - [ ] VSOP87 planetary positions (truncated series)

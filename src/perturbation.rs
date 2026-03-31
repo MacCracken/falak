@@ -174,6 +174,7 @@ pub struct AtmosphereParams {
 ///
 /// a_drag = −0.5 × ρ × Cd × (A/m) × v² × v̂
 #[must_use]
+#[inline]
 pub fn drag_acceleration(
     position: [f64; 3],
     velocity: [f64; 3],
@@ -218,6 +219,7 @@ pub fn drag_acceleration(
 /// * `cr` — Radiation pressure coefficient (1.0 = absorber, 2.0 = reflector)
 /// * `area_mass_ratio` — Cross-sectional area / mass (m²/kg)
 #[must_use]
+#[inline]
 pub fn srp_acceleration(
     position: [f64; 3],
     sun_position: [f64; 3],
@@ -258,6 +260,7 @@ pub fn srp_acceleration(
 /// * `third_body_position` — Third body position relative to central body (metres)
 /// * `mu_third` — Gravitational parameter of the third body (m³/s²)
 #[must_use]
+#[inline]
 pub fn third_body_acceleration(
     position: [f64; 3],
     third_body_position: [f64; 3],

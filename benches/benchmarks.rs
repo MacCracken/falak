@@ -151,6 +151,32 @@ fn maneuver_functions(c: &mut Criterion) {
     });
 }
 
+fn nbody_functions(c: &mut Criterion) {
+    let r: f64 = 7e6;
+    let mu: f64 = 3.986e14;
+    let v = (mu / r).sqrt();
+    let mut sys = falak::nbody::System::new(
+        vec![
+            falak::nbody::Body::new([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 5.972e24),
+            falak::nbody::Body::new([r, 0.0, 0.0], [0.0, v, 0.0], 1.0),
+        ],
+        0.0,
+    )
+    .unwrap();
+
+    c.bench_function("nbody_leapfrog_step(2)", |b| {
+        b.iter(|| {
+            falak::nbody::step_leapfrog(&mut sys, 10.0);
+        });
+    });
+
+    c.bench_function("nbody_rk4_step(2)", |b| {
+        b.iter(|| {
+            falak::nbody::step_rk4(&mut sys, 10.0);
+        });
+    });
+}
+
 fn bridge_functions(c: &mut Criterion) {
     c.bench_function("stellar_mass_to_mu", |b| {
         b.iter(|| {
@@ -181,6 +207,7 @@ criterion_group!(
     ephemeris_functions,
     perturbation_functions,
     maneuver_functions,
+    nbody_functions,
     bridge_functions,
 );
 criterion_main!(benches);

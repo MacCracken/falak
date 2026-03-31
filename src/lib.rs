@@ -5,9 +5,10 @@
 //!
 //! Arabic/Persian: فلک (falak) — sky, celestial sphere
 //!
-//! Provides Keplerian orbit mechanics with anomaly conversions, state vector
-//! transforms, and cross-crate bridges for the AGNOS ecosystem. Built on
-//! [hisab](https://crates.io/crates/hisab) for math foundations.
+//! Provides Keplerian orbit mechanics, transfer maneuvers, perturbation models,
+//! N-body simulation, ephemeris computation, reference frames, and spacecraft
+//! maneuver planning. Built on [hisab](https://crates.io/crates/hisab) for math
+//! foundations.
 //!
 //! # Modules
 //!
@@ -24,11 +25,11 @@
 //! - [`perturbation`] — J2/J3, drag, SRP, third-body perturbation accelerations
 //! - [`maneuver`] — Impulsive burns, rocket equation, escape/capture delta-v
 //!
-//! ### Stubs (not yet implemented)
-//! - [`nbody`]
+//! - [`nbody`] — N-body gravitational simulation with leapfrog and RK4 integrators
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
+/// Error types for orbital computations.
 pub mod error;
 /// Integration APIs for downstream consumers (soorat rendering).
 pub mod integration;
@@ -46,7 +47,7 @@ pub mod transfer;
 /// Orbital perturbations — J2/J3 oblateness, drag, SRP, third-body.
 pub mod perturbation;
 
-/// N-body gravitational simulation (stub — not yet implemented).
+/// N-body gravitational simulation — direct summation, leapfrog, RK4.
 pub mod nbody;
 
 /// Ephemeris computation — Julian date, sidereal time, calendar conversions.
@@ -58,8 +59,8 @@ pub mod frame;
 /// Spacecraft maneuvers — impulsive burns, rocket equation, escape/capture.
 pub mod maneuver;
 
-#[cfg(feature = "logging")]
 /// Structured logging for falak via `FALAK_LOG` env var.
+#[cfg(feature = "logging")]
 pub mod logging;
 
 pub use error::FalakError;
