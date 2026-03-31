@@ -11,8 +11,8 @@ readme = "README.md"
 documentation = "https://docs.rs/falak"
 keywords = ["orbital", "mechanics", "celestial", "kepler", "astrodynamics"]
 categories = ["science", "simulation"]
-publish = false
-exclude = [".claude/", ".github/", "docs/", "scripts/"]
+publish = true
+exclude = [".claude/", ".github/", "docs/", "scripts/", "bench-history.csv", "BENCHMARKS.md", "deny.toml", "codecov.yml", "rust-toolchain.toml", "Makefile", "Cargo.lock"]
 
 [features]
 default = []
