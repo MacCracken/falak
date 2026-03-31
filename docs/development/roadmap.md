@@ -26,7 +26,7 @@ Falak does NOT own:
 ### v0.1.0 (2026-03-25)
 - Core orbital elements, error types, module scaffolding
 
-### v0.2.0 (Unreleased)
+### v1.0.0 (2026-03-31)
 - Kepler's equation solver (elliptic + hyperbolic), all anomaly conversions
 - Hohmann, bi-elliptic, plane change, phasing transfers
 - Lambert problem solver (universal variables + Stumpff functions)

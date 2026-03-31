@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0] - 2026-03-31
 
 ### Added
 - **kepler** — Kepler's equation solver (Newton-Raphson with Danby starter for elliptic, log starter for hyperbolic), all anomaly conversions (M↔E↔ν elliptic, M↔H↔ν hyperbolic), orbital period, mean motion, vis-viva velocity, orbital radius, `StateVector` type, bidirectional state vector ↔ orbital elements conversion
