@@ -21,6 +21,13 @@
 - **cr3bp** — Circular Restricted Three-Body Problem module: all 5 Lagrange points (L1–L5, Newton's method for collinear + analytic equilateral), Jacobi constant, pseudo-potential, zero-velocity curves, equations of motion in the synodic frame; `LagrangePoints`, `SynodicState` types
 - **ephemeris** — Eclipse prediction: cylindrical shadow model (`eclipse_cylindrical`), conical shadow model with penumbra (`eclipse_conical`), `EclipseState` enum (Sunlit/Penumbra/Umbra), `EclipseInfo` type with shadow fraction
 - **integration/soorat** — `TransferTrajectory::from_lambert` generates renderable transfer trajectory from Lambert solution (numerical propagation + delta-v markers)
+- **transfer** — Combined plane change + altitude maneuver (`combined_maneuver`): single-impulse Δv with savings over separate Hohmann + plane change; `CombinedManeuver` type
+- **ephemeris** — Rise/set/transit times (`rise_transit_set`): Meeus algorithm for horizon crossings and meridian transit; `RiseTransitSet` type; `STANDARD_REFRACTION` constant
+- **frame** — IAU 2006 precession (`precession_angles`, `precess_j2000_to_date`, `precess_date_to_j2000`), IAU 1980 nutation series (9 dominant terms, `nutation`), mean/true obliquity (`mean_obliquity`, `true_obliquity`), equation of the equinoxes
+- **propagate** — General perturbation theory: osculating → mean elements (`osculating_to_mean`, first-order Brouwer J2), mean element propagation with secular rates (`propagate_mean_elements`); `MeanElements` type
+- **nbody** — Barnes-Hut octree O(N log N) gravity approximation (`compute_accelerations_barnes_hut`), configurable opening angle θ
+- **maneuver** — Low-thrust spiral transfer (`low_thrust_spiral`, `LowThrustTransfer`), Edelbaum low-thrust Δv with combined plane change (`edelbaum_delta_v`)
+- **bridge** — Tara: `stellar_luminosity` (Stefan-Boltzmann), `temperature_to_mass_kg`; Impetus: `orbital_to_gravity_force_vector`, `specific_orbital_energy`; Badal: `orbital_distance_extremes_au`, `obliquity_forcing`, `precession_period_years`
 
 ### Changed
 - **orbit** — `OrbitalElements::new` now accepts all orbit types: elliptical (e < 1, a > 0), parabolic (e = 1, p > 0), hyperbolic (e > 1, a < 0); periapsis returns p/2 for parabolic; apoapsis returns ∞ for open orbits

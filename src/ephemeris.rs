@@ -411,6 +411,135 @@ pub fn lunar_to_cartesian_metres(pos: &LunarPosition) -> [f64; 3] {
     ]
 }
 
+// ── Rise / set / transit ─────────────────────────────────────────────────
+
+/// Rise, transit, and set times for a celestial body.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct RiseTransitSet {
+    /// Julian date of rise (body crosses above the horizon), or `None` if
+    /// the body is circumpolar or never rises.
+    pub rise: Option<f64>,
+    /// Julian date of transit (body crosses the observer's meridian).
+    pub transit: Option<f64>,
+    /// Julian date of set (body crosses below the horizon), or `None` if
+    /// the body is circumpolar or never rises.
+    pub set: Option<f64>,
+}
+
+/// Compute rise, transit, and set times for a body at a given right ascension
+/// and declination, as observed from a location on Earth.
+///
+/// Uses the algorithm from Meeus (1991) Chapter 15, which provides times
+/// accurate to about 1 minute for slowly-moving objects (stars, Sun).
+///
+/// # Arguments
+///
+/// * `jd_0h` — Julian date at 0h UT on the day of interest
+/// * `ra` — Apparent right ascension (radians, 0..2π)
+/// * `dec` — Apparent declination (radians, −π/2..π/2)
+/// * `observer_lat` — Observer geodetic latitude (radians, −π/2..π/2)
+/// * `observer_lon` — Observer longitude (radians, east positive)
+/// * `horizon_elev` — Horizon elevation angle (radians, typically −0.5667° for
+///   standard atmospheric refraction, or 0.0 for geometric horizon)
+///
+/// # Errors
+///
+/// Returns [`FalakError::EphemerisError`] if the body is circumpolar (never
+/// rises or never sets at this latitude).
+#[must_use = "returns rise/transit/set times"]
+#[instrument(level = "trace")]
+pub fn rise_transit_set(
+    jd_0h: f64,
+    ra: f64,
+    dec: f64,
+    observer_lat: f64,
+    observer_lon: f64,
+    horizon_elev: f64,
+) -> Result<RiseTransitSet> {
+    // Hour angle at rise/set: cos(H₀) = (sin(h₀) - sin(φ)sin(δ)) / (cos(φ)cos(δ))
+    let sin_h0 = horizon_elev.sin();
+    let cos_lat = observer_lat.cos();
+    let sin_lat = observer_lat.sin();
+    let cos_dec = dec.cos();
+    let sin_dec = dec.sin();
+
+    let denom = cos_lat * cos_dec;
+
+    if denom.abs() < 1e-15 {
+        // Observer at pole or body at pole — special case
+        return if sin_lat * sin_dec > 0.0 {
+            // Same hemisphere → circumpolar (never sets)
+            Ok(RiseTransitSet {
+                rise: None,
+                transit: Some(transit_time(jd_0h, ra, observer_lon)),
+                set: None,
+            })
+        } else {
+            // Opposite hemisphere → never rises
+            Ok(RiseTransitSet {
+                rise: None,
+                transit: None,
+                set: None,
+            })
+        };
+    }
+
+    let cos_h0 = (sin_h0 - sin_lat * sin_dec) / denom;
+
+    if cos_h0 < -1.0 {
+        // Body is circumpolar (always above horizon)
+        return Ok(RiseTransitSet {
+            rise: None,
+            transit: Some(transit_time(jd_0h, ra, observer_lon)),
+            set: None,
+        });
+    }
+    if cos_h0 > 1.0 {
+        // Body never rises
+        return Ok(RiseTransitSet {
+            rise: None,
+            transit: None,
+            set: None,
+        });
+    }
+
+    let h0 = cos_h0.acos(); // hour angle at rise/set (radians)
+
+    // GMST at 0h UT
+    let gmst_0h = gmst(jd_0h);
+
+    // Transit: when hour angle = 0 → local sidereal time = RA
+    // m₀ = (RA - lon - GMST) / 2π  (fraction of day)
+    let m0 = (ra - observer_lon - gmst_0h) / std::f64::consts::TAU;
+    let m0 = m0.rem_euclid(1.0); // normalise to [0, 1)
+
+    // Rise: m₁ = m₀ - H₀/(2π)
+    let m1 = (m0 - h0 / std::f64::consts::TAU).rem_euclid(1.0);
+
+    // Set: m₂ = m₀ + H₀/(2π)
+    let m2 = (m0 + h0 / std::f64::consts::TAU).rem_euclid(1.0);
+
+    Ok(RiseTransitSet {
+        rise: Some(jd_0h + m1),
+        transit: Some(jd_0h + m0),
+        set: Some(jd_0h + m2),
+    })
+}
+
+/// Compute transit time (meridian crossing) for a body.
+fn transit_time(jd_0h: f64, ra: f64, observer_lon: f64) -> f64 {
+    let gmst_0h = gmst(jd_0h);
+    let m0 = (ra - observer_lon - gmst_0h) / std::f64::consts::TAU;
+    jd_0h + m0.rem_euclid(1.0)
+}
+
+/// Standard atmospheric refraction correction for rise/set (radians).
+///
+/// The standard value is −0°34' = −0.5667°, which accounts for atmospheric
+/// refraction at the horizon. Use this as `horizon_elev` in [`rise_transit_set`].
+pub const STANDARD_REFRACTION: f64 = -0.009_890_199_5; // -0.5667° in radians
+
 // ── Eclipse prediction ───────────────────────────────────────────────────
 
 /// Eclipse illumination state of a satellite.
@@ -1016,6 +1145,101 @@ mod tests {
             con.state == EclipseState::Sunlit || con.state == EclipseState::Penumbra,
             "edge case should be sunlit or penumbra: {:?}",
             con.state
+        );
+    }
+
+    // ── Rise/set/transit ─────────────────────────────────────────────
+
+    #[test]
+    fn rise_transit_set_sun_at_equinox() {
+        // Vernal equinox: Sun at RA=0, Dec=0.
+        // Observer at Greenwich (lat=51.5°N, lon=0°).
+        // Sun should transit around noon (~12h UT).
+        let jd_0h = calendar_to_jd(2024, 3, 20.0).unwrap();
+        let lat = 51.5_f64.to_radians();
+        let lon = 0.0;
+        let ra = 0.0;
+        let dec = 0.0;
+
+        let rts = rise_transit_set(jd_0h, ra, dec, lat, lon, STANDARD_REFRACTION).unwrap();
+
+        assert!(rts.rise.is_some(), "Sun should rise at 51.5°N");
+        assert!(rts.transit.is_some(), "Sun should transit");
+        assert!(rts.set.is_some(), "Sun should set at 51.5°N");
+
+        // Transit should be near 0.5 days (noon)
+        let transit_frac = rts.transit.unwrap() - jd_0h;
+        assert!(
+            (transit_frac - 0.5).abs() < 0.1,
+            "transit at {transit_frac:.3} days, expected ~0.5"
+        );
+
+        // Rise before transit, set after transit
+        assert!(rts.rise.unwrap() < rts.transit.unwrap());
+        assert!(rts.set.unwrap() > rts.transit.unwrap());
+    }
+
+    #[test]
+    fn rise_transit_set_circumpolar() {
+        // Star at Dec=+80° seen from 70°N latitude → circumpolar (never sets)
+        let jd_0h = calendar_to_jd(2024, 6, 21.0).unwrap();
+        let lat = 70.0_f64.to_radians();
+        let dec = 80.0_f64.to_radians();
+        let ra = 1.0;
+
+        let rts = rise_transit_set(jd_0h, ra, dec, lat, 0.0, 0.0).unwrap();
+
+        // Circumpolar: rise and set are None, transit exists
+        assert!(rts.rise.is_none(), "circumpolar body should not rise");
+        assert!(rts.set.is_none(), "circumpolar body should not set");
+        assert!(rts.transit.is_some(), "circumpolar body should transit");
+    }
+
+    #[test]
+    fn rise_transit_set_never_rises() {
+        // Star at Dec=−80° seen from 70°N latitude → never above horizon
+        let jd_0h = calendar_to_jd(2024, 6, 21.0).unwrap();
+        let lat = 70.0_f64.to_radians();
+        let dec = -80.0_f64.to_radians();
+        let ra = 1.0;
+
+        let rts = rise_transit_set(jd_0h, ra, dec, lat, 0.0, 0.0).unwrap();
+
+        assert!(rts.rise.is_none());
+        assert!(rts.set.is_none());
+        assert!(rts.transit.is_none());
+    }
+
+    #[test]
+    fn rise_transit_set_equatorial_observer() {
+        // Observer at equator: all bodies should rise and set (except pole stars)
+        let jd_0h = calendar_to_jd(2024, 1, 15.0).unwrap();
+        let lat = 0.0;
+        let dec = 30.0_f64.to_radians(); // Dec=30°
+
+        let rts = rise_transit_set(jd_0h, 3.0, dec, lat, 0.0, 0.0).unwrap();
+        assert!(rts.rise.is_some());
+        assert!(rts.set.is_some());
+        assert!(rts.transit.is_some());
+
+        // Day length should be ~12 hours at equator
+        let mut day_frac = rts.set.unwrap() - rts.rise.unwrap();
+        if day_frac < 0.0 {
+            day_frac += 1.0; // set wrapped past midnight
+        }
+        assert!(
+            day_frac > 0.3 && day_frac < 0.7,
+            "day fraction={day_frac:.3}, expected ~0.5"
+        );
+    }
+
+    #[test]
+    fn standard_refraction_value() {
+        // Verify the constant is approximately -0.5667°
+        let deg = STANDARD_REFRACTION.to_degrees();
+        assert!(
+            (deg + 0.5667).abs() < 0.001,
+            "standard refraction = {deg}°, expected -0.5667°"
         );
     }
 }

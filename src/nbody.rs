@@ -228,6 +228,218 @@ pub fn compute_accelerations_into(system: &System, acc: &mut Vec<[f64; 3]>) {
     }
 }
 
+// ── Barnes-Hut octree ────────────────────────────────────────────────────
+
+/// A node in the Barnes-Hut octree.
+#[derive(Debug)]
+struct OctreeNode {
+    /// Centre of mass of all bodies in this node.
+    com: [f64; 3],
+    /// Total mass (kg).
+    total_mass: f64,
+    /// Total gravitational parameter μ (m³/s²).
+    total_mu: f64,
+    /// Half-width of this cubic cell.
+    half_width: f64,
+    /// Centre of the cubic cell.
+    centre: [f64; 3],
+    /// Child octants (None if leaf or empty).
+    children: [Option<Box<OctreeNode>>; 8],
+    /// Body index if this is a leaf with exactly one body.
+    body_index: Option<usize>,
+}
+
+impl OctreeNode {
+    fn new(centre: [f64; 3], half_width: f64) -> Self {
+        Self {
+            com: [0.0; 3],
+            total_mass: 0.0,
+            total_mu: 0.0,
+            half_width,
+            centre,
+            children: Default::default(),
+            body_index: None,
+        }
+    }
+
+    /// Determine which octant a position falls into (0..7).
+    fn octant(&self, pos: [f64; 3]) -> usize {
+        let mut idx = 0;
+        if pos[0] >= self.centre[0] {
+            idx |= 1;
+        }
+        if pos[1] >= self.centre[1] {
+            idx |= 2;
+        }
+        if pos[2] >= self.centre[2] {
+            idx |= 4;
+        }
+        idx
+    }
+
+    /// Centre of the child octant.
+    fn child_centre(&self, octant: usize) -> [f64; 3] {
+        let qw = self.half_width * 0.5;
+        [
+            self.centre[0] + if octant & 1 != 0 { qw } else { -qw },
+            self.centre[1] + if octant & 2 != 0 { qw } else { -qw },
+            self.centre[2] + if octant & 4 != 0 { qw } else { -qw },
+        ]
+    }
+
+    /// Insert a body into the tree.
+    fn insert(&mut self, idx: usize, pos: [f64; 3], mass: f64, mu: f64) {
+        if self.total_mass == 0.0 && self.body_index.is_none() {
+            // Empty node — store directly
+            self.body_index = Some(idx);
+            self.com = pos;
+            self.total_mass = mass;
+            self.total_mu = mu;
+            return;
+        }
+
+        // If this node has a single body, push it down first
+        if let Some(existing_idx) = self.body_index.take() {
+            let existing_pos = self.com;
+            let existing_mass = self.total_mass;
+            let existing_mu = self.total_mu;
+
+            // Reset and re-insert existing body into child
+            let oct = self.octant(existing_pos);
+            let cc = self.child_centre(oct);
+            let hw = self.half_width * 0.5;
+            let child = self.children[oct].get_or_insert_with(|| Box::new(OctreeNode::new(cc, hw)));
+            child.insert(existing_idx, existing_pos, existing_mass, existing_mu);
+        }
+
+        // Insert new body into appropriate child
+        let oct = self.octant(pos);
+        let cc = self.child_centre(oct);
+        let hw = self.half_width * 0.5;
+        let child = self.children[oct].get_or_insert_with(|| Box::new(OctreeNode::new(cc, hw)));
+        child.insert(idx, pos, mass, mu);
+
+        // Update centre of mass
+        let new_total = self.total_mass + mass;
+        for (c, &p) in self.com.iter_mut().zip(pos.iter()) {
+            *c = (*c * self.total_mass + p * mass) / new_total;
+        }
+        self.total_mass = new_total;
+        self.total_mu += mu;
+    }
+
+    /// Compute gravitational acceleration on a body at `pos` using the
+    /// Barnes-Hut approximation with opening angle `theta`.
+    fn acceleration(
+        &self,
+        pos: [f64; 3],
+        body_idx: usize,
+        theta: f64,
+        softening_sq: f64,
+    ) -> [f64; 3] {
+        if self.total_mass == 0.0 {
+            return [0.0; 3];
+        }
+
+        // If this is a leaf with the query body itself, skip self-interaction
+        if let Some(idx) = self.body_index {
+            if idx == body_idx {
+                return [0.0; 3];
+            }
+            // Leaf with a different body — compute directly
+            return point_acceleration(pos, self.com, self.total_mu, softening_sq);
+        }
+
+        // Cell width / distance ratio (opening criterion)
+        let dx = self.com[0] - pos[0];
+        let dy = self.com[1] - pos[1];
+        let dz = self.com[2] - pos[2];
+        let dist_sq = dx * dx + dy * dy + dz * dz + softening_sq;
+        let cell_size = 2.0 * self.half_width;
+
+        if cell_size * cell_size < theta * theta * dist_sq {
+            // Cell is far enough — use monopole approximation
+            return point_acceleration(pos, self.com, self.total_mu, softening_sq);
+        }
+
+        // Cell is too close — recurse into children
+        let mut acc = [0.0; 3];
+        for c in self.children.iter().flatten() {
+            let ca = c.acceleration(pos, body_idx, theta, softening_sq);
+            acc[0] += ca[0];
+            acc[1] += ca[1];
+            acc[2] += ca[2];
+        }
+        acc
+    }
+}
+
+/// Gravitational acceleration from a point mass.
+#[inline]
+fn point_acceleration(pos: [f64; 3], source: [f64; 3], mu: f64, softening_sq: f64) -> [f64; 3] {
+    let dx = source[0] - pos[0];
+    let dy = source[1] - pos[1];
+    let dz = source[2] - pos[2];
+    let r2 = dx * dx + dy * dy + dz * dz + softening_sq;
+    let r = r2.sqrt();
+    let r3 = r2 * r;
+    let fac = mu / r3;
+    [fac * dx, fac * dy, fac * dz]
+}
+
+/// Compute gravitational accelerations using the Barnes-Hut tree algorithm.
+///
+/// O(N log N) approximation of the O(N²) direct summation. Accuracy is
+/// controlled by the opening angle `theta`:
+/// - `theta = 0.0` — exact (equivalent to direct summation)
+/// - `theta = 0.5` — good accuracy for most simulations
+/// - `theta = 1.0` — faster but less accurate
+///
+/// # Arguments
+///
+/// * `system` — The N-body system
+/// * `theta` — Opening angle parameter (0.0–1.0, typical 0.5)
+///
+/// # Returns
+///
+/// One acceleration `[ax, ay, az]` per body.
+#[must_use]
+pub fn compute_accelerations_barnes_hut(system: &System, theta: f64) -> Vec<[f64; 3]> {
+    let n = system.bodies.len();
+    if n <= 1 {
+        return vec![[0.0; 3]; n];
+    }
+
+    // Find bounding box
+    let mut min = system.bodies[0].position;
+    let mut max = system.bodies[0].position;
+    for b in &system.bodies[1..] {
+        for k in 0..3 {
+            min[k] = min[k].min(b.position[k]);
+            max[k] = max[k].max(b.position[k]);
+        }
+    }
+    let centre = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let half_width = ((max[0] - min[0]).max((max[1] - min[1]).max(max[2] - min[2])) * 0.5).max(1.0); // minimum 1m to avoid degenerate trees
+
+    // Build octree
+    let mut root = OctreeNode::new(centre, half_width);
+    for (i, b) in system.bodies.iter().enumerate() {
+        root.insert(i, b.position, b.mass, b.gravitational_parameter());
+    }
+
+    // Compute accelerations
+    let mut acc = vec![[0.0; 3]; n];
+    for (i, b) in system.bodies.iter().enumerate() {
+        acc[i] = root.acceleration(b.position, i, theta, system.softening_sq);
+    }
+    acc
+}
+
 // ── Leapfrog (Stormer-Verlet) integrator ──────────────────────────────────
 
 /// Advance the system by one step using the leapfrog (kick-drift-kick) integrator.
@@ -764,5 +976,79 @@ mod tests {
     fn body_kinetic_energy() {
         let b = Body::new([0.0; 3], [3.0, 4.0, 0.0], 2.0);
         assert!((b.kinetic_energy() - 25.0).abs() < 1e-10);
+    }
+
+    // ── Barnes-Hut ──────────────────────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn barnes_hut_matches_direct_two_body() {
+        let sys = two_body_system();
+        let direct = compute_accelerations(&sys);
+        let bh = compute_accelerations_barnes_hut(&sys, 0.0); // θ=0 → exact
+
+        for i in 0..2 {
+            for k in 0..3 {
+                let rel = if direct[i][k].abs() > 1e-10 {
+                    (bh[i][k] - direct[i][k]).abs() / direct[i][k].abs()
+                } else {
+                    (bh[i][k] - direct[i][k]).abs()
+                };
+                assert!(
+                    rel < 1e-10,
+                    "body {i} axis {k}: direct={} bh={}",
+                    direct[i][k],
+                    bh[i][k]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn barnes_hut_approximate_accuracy() {
+        // Multi-body system: verify θ=0.5 gives < 1% error
+        let bodies = vec![
+            Body::new([0.0, 0.0, 0.0], [0.0; 3], 1e30),
+            Body::new([1e10, 0.0, 0.0], [0.0; 3], 1e28),
+            Body::new([0.0, 2e10, 0.0], [0.0; 3], 1e28),
+            Body::new([-1e10, -1e10, 0.0], [0.0; 3], 1e28),
+            Body::new([5e9, 5e9, 5e9], [0.0; 3], 1e28),
+        ];
+        let sys = System::new(bodies, 0.0).unwrap();
+
+        let direct = compute_accelerations(&sys);
+        let bh = compute_accelerations_barnes_hut(&sys, 0.5);
+
+        for i in 0..5 {
+            let d_mag = (direct[i][0].powi(2) + direct[i][1].powi(2) + direct[i][2].powi(2)).sqrt();
+            let err_mag = ((bh[i][0] - direct[i][0]).powi(2)
+                + (bh[i][1] - direct[i][1]).powi(2)
+                + (bh[i][2] - direct[i][2]).powi(2))
+            .sqrt();
+            let rel_err = if d_mag > 0.0 { err_mag / d_mag } else { 0.0 };
+            assert!(
+                rel_err < 0.01,
+                "body {i}: relative error = {rel_err:.4} (> 1%)"
+            );
+        }
+    }
+
+    #[test]
+    fn barnes_hut_single_body() {
+        let sys = System::new(vec![Body::new([0.0; 3], [0.0; 3], 1e30)], 0.0).unwrap();
+        let bh = compute_accelerations_barnes_hut(&sys, 0.5);
+        assert_eq!(bh[0], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn barnes_hut_newton_third_law() {
+        let sys = two_body_system();
+        let bh = compute_accelerations_barnes_hut(&sys, 0.5);
+        // m1*a1 + m2*a2 ≈ 0 (Newton's third law)
+        for k in 0..3 {
+            let net = sys.bodies[0].mass * bh[0][k] + sys.bodies[1].mass * bh[1][k];
+            assert!(net.abs() < 1e-3, "net force axis {k}: {net}");
+        }
     }
 }

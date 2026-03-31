@@ -15,28 +15,28 @@ Falak does NOT own:
 ## Backlog
 
 ### Orbit Propagation — Extended
-- [ ] General perturbation theory (osculating → mean elements)
+- [x] General perturbation theory (osculating → mean elements)
 
 ### N-Body Simulation — Extended
-- [ ] Barnes-Hut tree approximation for large N
+- [x] Barnes-Hut tree approximation for large N
 - [x] Restricted three-body problem (Lagrange points)
 
 ### Ephemeris — Extended
-- [ ] Rise/set/transit times
+- [x] Rise/set/transit times
 - [x] Eclipse prediction
-- [ ] Precession and nutation corrections
+- [x] Precession and nutation corrections
 
 ### Transfer Maneuvers — Extended
 - [x] Lambert problem solver (given two positions and time)
-- [ ] Combined plane change + altitude maneuvers
+- [x] Combined plane change + altitude maneuvers
 
 ### Maneuver Planning — Extended
-- [ ] Continuous low-thrust trajectory modelling
+- [x] Continuous low-thrust trajectory modelling
 
 ### Cross-Crate Bridges — Extended
-- [ ] **tara bridge**: additional stellar property conversions
-- [ ] **impetus bridge**: orbital velocity → gravitational force vector
-- [ ] **badal bridge**: additional climate coupling parameters
+- [x] **tara bridge**: additional stellar property conversions
+- [x] **impetus bridge**: orbital velocity → gravitational force vector
+- [x] **badal bridge**: additional climate coupling parameters
 
 ### Soorat Integration — Extended
 - [x] Transfer trajectory generation from Hohmann/Lambert results

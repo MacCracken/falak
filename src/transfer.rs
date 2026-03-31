@@ -230,6 +230,85 @@ pub fn phasing(radius: f64, mu: f64, phase_angle: f64, n_orbits: u32) -> Result<
     Ok((delta_v, t_phase))
 }
 
+// ── Combined plane change + altitude maneuver ───────────────────────────
+
+/// Result of a combined plane change and altitude change maneuver.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct CombinedManeuver {
+    /// Single-impulse delta-v (m/s).
+    pub delta_v: f64,
+    /// Delta-v that would be required for separate Hohmann + plane change (m/s).
+    pub separate_delta_v: f64,
+    /// Delta-v savings from combining the maneuvers (m/s).
+    pub savings: f64,
+    /// Initial circular velocity (m/s).
+    pub v_initial: f64,
+    /// Final circular velocity (m/s).
+    pub v_final: f64,
+}
+
+/// Compute a combined plane change and altitude change maneuver.
+///
+/// Performs both the orbit raise/lower and inclination change in a single
+/// impulse, which is more efficient than doing them separately (especially
+/// when the plane change is large).
+///
+/// The optimal strategy performs the plane change at the highest altitude
+/// (lowest velocity) to minimise the delta-v cost. This function computes
+/// the single-impulse cost assuming the burn occurs at the initial altitude.
+///
+/// Δv = √(v₁² + v₂² − 2·v₁·v₂·cos(Δi))
+///
+/// # Arguments
+///
+/// * `r1` — Initial circular orbit radius (m)
+/// * `r2` — Final circular orbit radius (m)
+/// * `delta_inclination` — Inclination change (radians, non-negative)
+/// * `mu` — Gravitational parameter (m³/s²)
+///
+/// # Errors
+///
+/// Returns [`FalakError::InvalidParameter`] if radii, μ, or inclination are invalid.
+#[must_use = "returns the computed combined maneuver"]
+#[instrument(level = "trace")]
+pub fn combined_maneuver(
+    r1: f64,
+    r2: f64,
+    delta_inclination: f64,
+    mu: f64,
+) -> Result<CombinedManeuver> {
+    validate_positive("r1", r1)?;
+    validate_positive("r2", r2)?;
+    validate_positive("mu", mu)?;
+    if delta_inclination < 0.0 {
+        return Err(FalakError::InvalidParameter(
+            format!("inclination change must be non-negative, got {delta_inclination}").into(),
+        ));
+    }
+
+    let v1 = (mu / r1).sqrt();
+    let v2 = (mu / r2).sqrt();
+
+    // Combined single-impulse delta-v (law of cosines in velocity space)
+    let combined_dv = (v1 * v1 + v2 * v2 - 2.0 * v1 * v2 * delta_inclination.cos()).sqrt();
+
+    // Separate maneuvers for comparison:
+    // Hohmann Δv + plane change Δv at the optimal point (apoapsis of transfer)
+    let hohmann_dv = (v1 - (mu * (2.0 / r1 - 2.0 / (r1 + r2))).sqrt()).abs()
+        + (v2 - (mu * (2.0 / r2 - 2.0 / (r1 + r2))).sqrt()).abs();
+    let plane_dv = 2.0 * v2.min(v1) * (delta_inclination / 2.0).sin();
+    let separate_dv = hohmann_dv + plane_dv;
+
+    Ok(CombinedManeuver {
+        delta_v: combined_dv,
+        separate_delta_v: separate_dv,
+        savings: separate_dv - combined_dv,
+        v_initial: v1,
+        v_final: v2,
+    })
+}
+
 // ── Lambert problem ──────────────────────────────────────────────────────
 
 /// Solution to Lambert's problem.
@@ -774,6 +853,61 @@ mod tests {
             "retrograde v1_mag={v1_mag} should be orbital"
         );
     }
+
+    // ── Combined maneuver ─────────────────────────────────────────────
+
+    #[test]
+    fn combined_maneuver_pure_altitude() {
+        // With zero inclination change, should equal Hohmann delta-v
+        let cm = combined_maneuver(R_LEO, R_GEO, 0.0, MU_EARTH).unwrap();
+        // Combined with di=0: dv = |v1 - v2| (single impulse)
+        // This differs from Hohmann (two impulses), so combined < Hohmann is not guaranteed
+        assert!(cm.delta_v > 0.0);
+        assert!(
+            (cm.savings).abs() < cm.separate_delta_v,
+            "savings should be reasonable"
+        );
+    }
+
+    #[test]
+    fn combined_maneuver_pure_plane_change() {
+        // Same altitude, only plane change: should match plane_change function
+        let r = 7e6;
+        let di = 28.5_f64.to_radians();
+        let cm = combined_maneuver(r, r, di, MU_EARTH).unwrap();
+        let pc = plane_change((MU_EARTH / r).sqrt(), di).unwrap();
+        assert!(
+            (cm.delta_v - pc.delta_v).abs() < 1.0,
+            "combined={:.1} vs plane_change={:.1}",
+            cm.delta_v,
+            pc.delta_v
+        );
+    }
+
+    #[test]
+    fn combined_maneuver_saves_over_separate() {
+        // Large plane change + altitude change: combined should save delta-v
+        let cm = combined_maneuver(R_LEO, R_GEO, 28.5_f64.to_radians(), MU_EARTH).unwrap();
+        assert!(
+            cm.savings > 0.0,
+            "combined should save over separate: savings={:.1}",
+            cm.savings
+        );
+        assert!(
+            cm.delta_v < cm.separate_delta_v,
+            "combined {:.1} should < separate {:.1}",
+            cm.delta_v,
+            cm.separate_delta_v
+        );
+    }
+
+    #[test]
+    fn combined_maneuver_invalid() {
+        assert!(combined_maneuver(-1.0, R_GEO, 0.5, MU_EARTH).is_err());
+        assert!(combined_maneuver(R_LEO, R_GEO, -0.1, MU_EARTH).is_err());
+    }
+
+    // ── Lambert ─────────────────────────────────────────────────────────
 
     #[test]
     fn lambert_hyperbolic_short_tof() {

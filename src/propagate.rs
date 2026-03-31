@@ -425,6 +425,179 @@ pub fn encke(
     })
 }
 
+// ── Mean elements (Brouwer J2 theory) ────────────────────────────────────
+
+/// Mean orbital elements with J2 short-period variations removed.
+///
+/// Mean elements change only due to secular and long-period effects,
+/// making them suitable for long-term orbit prediction without numerical
+/// integration.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct MeanElements {
+    /// Mean semi-major axis (m).
+    pub semi_major_axis: f64,
+    /// Mean eccentricity.
+    pub eccentricity: f64,
+    /// Mean inclination (radians).
+    pub inclination: f64,
+    /// Mean RAAN (radians).
+    pub raan: f64,
+    /// Mean argument of periapsis (radians).
+    pub argument_of_periapsis: f64,
+    /// Mean anomaly (radians).
+    pub mean_anomaly: f64,
+}
+
+/// Convert osculating orbital elements to mean elements by removing
+/// J2 short-period variations (first-order Brouwer theory).
+///
+/// The short-period terms oscillate at the orbital period and average to
+/// zero over one revolution. Removing them gives the slowly-varying mean
+/// elements.
+///
+/// # Arguments
+///
+/// * `osc` — Osculating orbital elements
+/// * `mu` — Gravitational parameter (m³/s²)
+/// * `j2` — J2 zonal harmonic coefficient
+/// * `r_body` — Central body equatorial radius (m)
+///
+/// # Errors
+///
+/// Returns an error if the orbit is not elliptical or parameters are invalid.
+#[must_use = "returns the mean elements"]
+#[instrument(level = "trace", skip(osc))]
+pub fn osculating_to_mean(
+    osc: &crate::orbit::OrbitalElements,
+    mu: f64,
+    j2: f64,
+    r_body: f64,
+) -> Result<MeanElements> {
+    if !osc.is_elliptical() {
+        return Err(FalakError::InvalidParameter(
+            "osculating-to-mean conversion requires elliptical orbit".into(),
+        ));
+    }
+    if mu <= 0.0 || r_body <= 0.0 {
+        return Err(FalakError::InvalidParameter(
+            "mu and r_body must be positive".into(),
+        ));
+    }
+
+    let a = osc.semi_major_axis;
+    let e = osc.eccentricity;
+    let i = osc.inclination;
+    let omega = osc.argument_of_periapsis;
+    let nu = osc.true_anomaly;
+
+    let p = a * (1.0 - e * e);
+    let eta = (1.0 - e * e).sqrt();
+    let gamma2 = j2 * (r_body / p) * (r_body / p); // J2 × (R/p)²
+
+    let sin_i = i.sin();
+    let cos_i = i.cos();
+    let sin2_i = sin_i * sin_i;
+
+    // Eccentric anomaly from true anomaly
+    let ea = 2.0 * ((nu / 2.0).tan() / ((1.0 + e) / (1.0 - e)).sqrt()).atan();
+    let m_osc = ea - e * ea.sin(); // osculating mean anomaly
+
+    // J2 short-period corrections (first-order Brouwer)
+    let r = p / (1.0 + e * nu.cos());
+    let a_r = a / r;
+
+    // Short-period variation in semi-major axis
+    let da_sp = a * gamma2 * ((a_r).powi(3) - 1.0 / eta.powi(3)) * (1.0 - 1.5 * sin2_i)
+        + a * gamma2 * 1.5 * sin2_i * (a_r).powi(3) * (2.0 * (omega + nu)).cos();
+
+    // Short-period variation in eccentricity
+    let de_sp = gamma2 / (4.0 * e)
+        * eta
+        * ((1.0 - 1.5 * sin2_i) * (1.0 - (a_r).powi(2) + 2.0 * e * (a_r - 1.0 / (1.0 + eta)))
+            + 1.5 * sin2_i * ((a_r).powi(2) - (a_r)) * (2.0 * (omega + nu)).cos());
+
+    // Short-period variation in inclination
+    let di_sp = -gamma2 * 0.75 * sin_i * cos_i * (a_r).powi(2) * (2.0 * (omega + nu)).cos();
+
+    // Short-period variation in RAAN
+    let draan_sp =
+        -gamma2 * 1.5 * cos_i * (a_r).powi(2) * (omega + nu - m_osc + e * nu.sin()).sin();
+
+    // Short-period variation in argument of periapsis
+    let domega_sp = gamma2
+        * (0.75 * (5.0 * cos_i * cos_i - 1.0) / e * ((a_r).powi(2) - (a_r)) * nu.sin()
+            + 1.5 * sin2_i / (2.0 * e) * (a_r).powi(2) * (2.0 * (omega + nu)).sin());
+
+    // Short-period variation in mean anomaly (includes secular removed)
+    let dm_sp = gamma2 * eta / (2.0 * e)
+        * ((1.0 - 1.5 * sin2_i) * ((a_r).powi(2) + a_r + 1.0 / (1.0 + eta)) * e * nu.sin()
+            - 1.5 * sin2_i * (a_r).powi(2) * (2.0 * (omega + nu)).sin());
+
+    // Mean = osculating - short-period
+    Ok(MeanElements {
+        semi_major_axis: a - da_sp,
+        eccentricity: e - de_sp,
+        inclination: i - di_sp,
+        raan: osc.raan - draan_sp,
+        argument_of_periapsis: omega - domega_sp,
+        mean_anomaly: (m_osc - dm_sp).rem_euclid(std::f64::consts::TAU),
+    })
+}
+
+/// Propagate mean elements forward in time using secular J2 rates.
+///
+/// This is much faster than numerical integration and accurate for
+/// long-term prediction (days to months) when only J2 effects matter.
+///
+/// # Arguments
+///
+/// * `mean` — Mean orbital elements
+/// * `mu` — Gravitational parameter (m³/s²)
+/// * `j2` — J2 coefficient
+/// * `r_body` — Body equatorial radius (m)
+/// * `dt` — Time to propagate (seconds)
+#[must_use = "returns the propagated mean elements"]
+#[instrument(level = "trace", skip(mean))]
+pub fn propagate_mean_elements(
+    mean: &MeanElements,
+    mu: f64,
+    j2: f64,
+    r_body: f64,
+    dt: f64,
+) -> Result<MeanElements> {
+    let a = mean.semi_major_axis;
+    let e = mean.eccentricity;
+    let i = mean.inclination;
+
+    if a <= 0.0 || mu <= 0.0 {
+        return Err(FalakError::InvalidParameter(
+            "semi-major axis and mu must be positive".into(),
+        ));
+    }
+
+    let n = (mu / (a * a * a)).sqrt(); // mean motion
+    let p = a * (1.0 - e * e);
+    let ratio = r_body / p;
+    let ratio2 = ratio * ratio;
+    let sin2_i = i.sin().powi(2);
+
+    // Secular rates (Brouwer first-order)
+    let d_raan = -1.5 * n * j2 * ratio2 * i.cos();
+    let d_omega = 1.5 * n * j2 * ratio2 * (2.0 - 2.5 * sin2_i);
+    let d_m = n * (1.0 + 1.5 * j2 * ratio2 * (1.0 - 1.5 * sin2_i) / (1.0 - e * e).sqrt());
+
+    Ok(MeanElements {
+        semi_major_axis: a, // a is constant under J2 secular
+        eccentricity: e,    // e is constant under J2 secular (first order)
+        inclination: i,     // i is constant under J2 secular (first order)
+        raan: (mean.raan + d_raan * dt).rem_euclid(std::f64::consts::TAU),
+        argument_of_periapsis: (mean.argument_of_periapsis + d_omega * dt)
+            .rem_euclid(std::f64::consts::TAU),
+        mean_anomaly: (mean.mean_anomaly + d_m * dt).rem_euclid(std::f64::consts::TAU),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +872,90 @@ mod tests {
         let no_perturb = |_p: [f64; 3], _v: [f64; 3], _t: f64| -> [f64; 3] { [0.0; 3] };
         assert!(encke(&elem, -1.0, 100.0, 10.0, &no_perturb).is_err());
         assert!(encke(&elem, MU_EARTH, 100.0, -1.0, &no_perturb).is_err());
+    }
+
+    // ── Mean elements ───────────────────────────────────────────────────
+
+    #[test]
+    fn osculating_to_mean_preserves_scale() {
+        let elem = leo_elements();
+        let mean = osculating_to_mean(
+            &elem,
+            MU_EARTH,
+            crate::perturbation::J2_EARTH,
+            crate::perturbation::R_EARTH,
+        )
+        .unwrap();
+
+        // Mean and osculating should differ by small J2 corrections
+        let da = (mean.semi_major_axis - elem.semi_major_axis).abs();
+        assert!(
+            da < 5000.0, // < 5 km difference for LEO (J2 short-period is ~1-2 km)
+            "mean-osc SMA difference = {da:.1} m"
+        );
+
+        let de = (mean.eccentricity - elem.eccentricity).abs();
+        assert!(de < 0.01, "mean-osc ecc difference = {de:.6}");
+
+        let di = (mean.inclination - elem.inclination).abs();
+        assert!(di < 0.001, "mean-osc inc difference = {di:.6} rad");
+    }
+
+    #[test]
+    fn mean_elements_secular_raan_drift() {
+        let elem =
+            crate::orbit::OrbitalElements::new(7e6, 0.001, 51.6_f64.to_radians(), 0.0, 0.0, 0.0)
+                .unwrap();
+        let mean = osculating_to_mean(
+            &elem,
+            MU_EARTH,
+            crate::perturbation::J2_EARTH,
+            crate::perturbation::R_EARTH,
+        )
+        .unwrap();
+
+        // Propagate mean elements for 1 day
+        let mean_1d = propagate_mean_elements(
+            &mean,
+            MU_EARTH,
+            crate::perturbation::J2_EARTH,
+            crate::perturbation::R_EARTH,
+            86400.0,
+        )
+        .unwrap();
+
+        // RAAN should drift (ISS-like orbit drifts ~5°/day westward)
+        let mut raan_drift = mean_1d.raan - mean.raan;
+        if raan_drift > std::f64::consts::PI {
+            raan_drift -= TAU;
+        }
+        if raan_drift < -std::f64::consts::PI {
+            raan_drift += TAU;
+        }
+        let raan_drift_deg = raan_drift.to_degrees();
+        assert!(
+            raan_drift_deg < -3.0 && raan_drift_deg > -7.0,
+            "RAAN drift = {raan_drift_deg:.2}°/day, expected ~-5°"
+        );
+
+        // SMA, ecc, inc should be unchanged (secular J2)
+        assert!(
+            (mean_1d.semi_major_axis - mean.semi_major_axis).abs() < 1e-6,
+            "SMA should be constant under secular J2"
+        );
+    }
+
+    #[test]
+    fn mean_elements_invalid() {
+        let hyp = crate::orbit::OrbitalElements::new(-1e7, 1.5, 0.0, 0.0, 0.0, 0.5).unwrap();
+        assert!(
+            osculating_to_mean(
+                &hyp,
+                MU_EARTH,
+                crate::perturbation::J2_EARTH,
+                crate::perturbation::R_EARTH,
+            )
+            .is_err()
+        );
     }
 }
