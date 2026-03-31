@@ -137,8 +137,11 @@ impl System {
                 let dy = self.bodies[j].position[1] - self.bodies[i].position[1];
                 let dz = self.bodies[j].position[2] - self.bodies[i].position[2];
                 let r = (dx * dx + dy * dy + dz * dz + self.softening_sq).sqrt();
-                // Use μ_i × m_j / r (where μ_i = G×m_i or canonical μ)
-                pe -= self.bodies[i].gravitational_parameter() * self.bodies[j].mass / r;
+                // Symmetric PE: −(μ_i × m_j + μ_j × m_i) / (2r)
+                // Reduces to −G × m_i × m_j / r when both use G×M
+                let pe_ij = self.bodies[i].gravitational_parameter() * self.bodies[j].mass
+                    + self.bodies[j].gravitational_parameter() * self.bodies[i].mass;
+                pe -= pe_ij / (2.0 * r);
             }
         }
         pe
@@ -238,9 +241,10 @@ pub fn compute_accelerations_into(system: &System, acc: &mut Vec<[f64; 3]>) {
 #[instrument(level = "trace", skip(system))]
 pub fn step_leapfrog(system: &mut System, dt: f64) {
     let half_dt = 0.5 * dt;
+    let mut acc = Vec::with_capacity(system.bodies.len());
 
     // Kick (half step)
-    let acc = compute_accelerations(system);
+    compute_accelerations_into(system, &mut acc);
     for (body, a) in system.bodies.iter_mut().zip(acc.iter()) {
         body.velocity[0] += half_dt * a[0];
         body.velocity[1] += half_dt * a[1];
@@ -254,8 +258,8 @@ pub fn step_leapfrog(system: &mut System, dt: f64) {
         body.position[2] += dt * body.velocity[2];
     }
 
-    // Kick (half step)
-    let acc = compute_accelerations(system);
+    // Kick (half step) — reuses acc buffer
+    compute_accelerations_into(system, &mut acc);
     for (body, a) in system.bodies.iter_mut().zip(acc.iter()) {
         body.velocity[0] += half_dt * a[0];
         body.velocity[1] += half_dt * a[1];

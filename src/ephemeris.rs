@@ -20,6 +20,12 @@ pub const MJD_OFFSET: f64 = 2_400_000.5;
 /// Seconds per Julian day.
 pub const SECONDS_PER_DAY: f64 = 86_400.0;
 
+/// Seconds per sidereal day (IERS 2010).
+pub const SECONDS_PER_SIDEREAL_DAY: f64 = 86_164.090_5;
+
+/// Earth's sidereal rotation rate (rad/s).
+pub const EARTH_ROTATION_RATE: f64 = std::f64::consts::TAU / SECONDS_PER_SIDEREAL_DAY;
+
 /// Julian century in days.
 pub const DAYS_PER_JULIAN_CENTURY: f64 = 36_525.0;
 

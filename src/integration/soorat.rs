@@ -192,6 +192,7 @@ impl GroundTrack {
     /// # Errors
     ///
     /// Returns errors if elements are not elliptical or parameters are invalid.
+    #[must_use = "returns the computed ground track"]
     pub fn from_elements(
         elements: &crate::orbit::OrbitalElements,
         mu: f64,
@@ -205,7 +206,7 @@ impl GroundTrack {
         let dt = total_time / total_points as f64;
 
         let gmst0 = crate::ephemeris::gmst(epoch_jd);
-        let earth_rate = std::f64::consts::TAU / 86_164.1; // sidereal day
+        let earth_rate = crate::ephemeris::EARTH_ROTATION_RATE;
 
         let mut points = Vec::with_capacity(total_points);
         let mut altitudes = Vec::with_capacity(total_points);
