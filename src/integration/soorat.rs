@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Orbital trajectory points for line rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OrbitPath {
     /// Points along the orbit `[x, y, z]` in metres (or km, consumer-defined).
     pub points: Vec<[f64; 3]>,
@@ -35,25 +36,25 @@ impl OrbitPath {
     ) -> Self {
         let a = elements.semi_major_axis;
         let e = elements.eccentricity;
-        // Kepler's third law: T = 2π × sqrt(a³/μ)
-        let period = std::f64::consts::TAU * (a * a * a / mu).sqrt();
+        // Kepler's third law via kepler module
+        let period = crate::kepler::orbital_period(a, mu).unwrap_or(0.0);
 
         let mut points = Vec::with_capacity(num_points);
         let mut speeds = Vec::with_capacity(num_points);
 
         for i in 0..num_points {
             let true_anom = std::f64::consts::TAU * i as f64 / num_points as f64;
-            let r = a * (1.0 - e * e) / (1.0 + e * true_anom.cos());
+            let r = crate::kepler::radius_at_true_anomaly(a, e, true_anom);
 
             // Perifocal coordinates
             let px = r * true_anom.cos();
             let py = r * true_anom.sin();
 
-            // Simplified: skip full rotation to ECI for now (perifocal frame)
+            // Simplified: perifocal frame (skip full rotation to ECI)
             points.push([px, py, 0.0]);
 
             // Vis-viva speed
-            let v = (mu * (2.0 / r - 1.0 / a)).sqrt();
+            let v = crate::kepler::vis_viva(r, a, mu).unwrap_or(0.0);
             speeds.push(v);
         }
 
@@ -71,6 +72,7 @@ impl OrbitPath {
 
 /// Body positions for instanced sphere rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PlanetaryPositions {
     /// Bodies with position and properties.
     pub bodies: Vec<CelestialBody>,
@@ -78,6 +80,7 @@ pub struct PlanetaryPositions {
 
 /// A celestial body for rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CelestialBody {
     /// Name.
     pub name: String,
@@ -93,6 +96,7 @@ pub struct CelestialBody {
 
 /// Transfer trajectory for colored line rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TransferTrajectory {
     /// Points along the transfer `[x, y, z]`.
     pub points: Vec<[f64; 3]>,
@@ -108,6 +112,7 @@ pub struct TransferTrajectory {
 
 /// Ground track for map overlay rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroundTrack {
     /// Sub-satellite points `[latitude_deg, longitude_deg]`.
     pub points: Vec<[f64; 2]>,

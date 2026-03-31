@@ -10,5 +10,79 @@ fn orbit_creation(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, orbit_creation);
+fn kepler_elliptic(c: &mut Criterion) {
+    c.bench_function("solve_kepler_elliptic(e=0.5)", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::kepler::solve_kepler_elliptic(1.5, 0.5));
+        });
+    });
+
+    c.bench_function("solve_kepler_elliptic(e=0.99)", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::kepler::solve_kepler_elliptic(0.1, 0.99));
+        });
+    });
+}
+
+fn kepler_hyperbolic(c: &mut Criterion) {
+    c.bench_function("solve_kepler_hyperbolic(e=1.5)", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::kepler::solve_kepler_hyperbolic(2.0, 1.5));
+        });
+    });
+}
+
+fn anomaly_conversions(c: &mut Criterion) {
+    c.bench_function("mean_to_true_anomaly(e=0.3)", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::kepler::mean_to_true_anomaly(1.0, 0.3));
+        });
+    });
+}
+
+fn state_vector_roundtrip(c: &mut Criterion) {
+    let elements = falak::orbit::OrbitalElements::new(7e6, 0.1, 0.5, 1.0, 0.5, 0.8).unwrap();
+    let mu = 3.986_004_418e14;
+
+    c.bench_function("elements_to_state", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::kepler::elements_to_state(&elements, mu));
+        });
+    });
+
+    let state = falak::kepler::elements_to_state(&elements, mu).unwrap();
+    c.bench_function("state_to_elements", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::kepler::state_to_elements(&state, mu));
+        });
+    });
+}
+
+fn bridge_functions(c: &mut Criterion) {
+    c.bench_function("stellar_mass_to_mu", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::bridge::stellar_mass_to_mu(1.989e30));
+        });
+    });
+
+    c.bench_function("orbital_to_gravity_force", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::bridge::orbital_to_gravity_force(
+                [6.371e6, 0.0, 0.0],
+                5.972e24,
+                1.0,
+            ));
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    orbit_creation,
+    kepler_elliptic,
+    kepler_hyperbolic,
+    anomaly_conversions,
+    state_vector_roundtrip,
+    bridge_functions,
+);
 criterion_main!(benches);

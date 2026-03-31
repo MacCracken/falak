@@ -14,13 +14,12 @@
 //!
 //! - [`error`] — Error types for orbital computations
 //! - [`orbit`] — Orbital elements and state vectors
-//! - [`kepler`] — Kepler's laws, anomaly conversions, orbital period and velocity
-//! - [`transfer`] — Hohmann, bi-elliptic, and Lambert transfer maneuvers
-//! - [`perturbation`] — J2 oblateness, drag, solar radiation pressure, third-body effects
-//! - [`nbody`] — N-body gravitational simulation with numerical integration
-//! - [`ephemeris`] — Planetary positions, Julian date, coordinate transforms
-//! - [`frame`] — Reference frames (ECI, ECEF, perifocal, rotating)
-//! - [`maneuver`] — Delta-v budgets, impulsive burns, continuous thrust
+//! - [`kepler`] — Kepler's equation solver, anomaly conversions, period, velocity, state vectors
+//! - [`bridge`] — Cross-crate conversions (tara/impetus/badal)
+//! - [`integration`] — Downstream consumer APIs (soorat rendering)
+//!
+//! ### Stubs (not yet implemented)
+//! - [`transfer`], [`perturbation`], [`nbody`], [`ephemeris`], [`frame`], [`maneuver`]
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
@@ -31,25 +30,26 @@ pub mod integration;
 /// Orbital elements and state vectors.
 pub mod orbit;
 
-/// Kepler's laws — period, velocity, anomaly conversions (mean, eccentric, true).
+/// Kepler's laws — period, velocity, anomaly conversions (mean, eccentric, true),
+/// state vector ↔ orbital elements conversion.
 pub mod kepler;
 
-/// Orbital transfer maneuvers — Hohmann, bi-elliptic, Lambert problem.
+/// Orbital transfer maneuvers (stub — not yet implemented).
 pub mod transfer;
 
-/// Orbital perturbations — J2 oblateness, drag, solar radiation pressure, third body.
+/// Orbital perturbations (stub — not yet implemented).
 pub mod perturbation;
 
-/// N-body gravitational simulation — numerical integration, symplectic methods.
+/// N-body gravitational simulation (stub — not yet implemented).
 pub mod nbody;
 
-/// Ephemeris computation — planetary positions, Julian date, coordinate transforms.
+/// Ephemeris computation (stub — not yet implemented).
 pub mod ephemeris;
 
-/// Reference frames — ECI, ECEF, perifocal, rotating frames, coordinate transforms.
+/// Reference frames (stub — not yet implemented).
 pub mod frame;
 
-/// Spacecraft maneuvers — delta-v budgets, impulsive burns, continuous thrust.
+/// Spacecraft maneuvers (stub — not yet implemented).
 pub mod maneuver;
 
 #[cfg(feature = "logging")]

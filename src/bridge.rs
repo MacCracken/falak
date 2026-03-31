@@ -11,8 +11,7 @@
 #[must_use]
 #[inline]
 pub fn stellar_mass_to_mu(mass_kg: f64) -> f64 {
-    const G: f64 = 6.674_30e-11;
-    G * mass_kg
+    crate::kepler::G * mass_kg
 }
 
 /// Convert luminosity (W) to habitable zone distance (AU).
@@ -41,12 +40,11 @@ pub fn orbital_to_gravity_force(
     central_mass_kg: f64,
     body_mass_kg: f64,
 ) -> f64 {
-    const G: f64 = 6.674_30e-11;
     let r2 = position[0] * position[0] + position[1] * position[1] + position[2] * position[2];
     if r2 < 1e-20 {
         return 0.0;
     }
-    G * central_mass_kg * body_mass_kg / r2
+    crate::kepler::G * central_mass_kg * body_mass_kg / r2
 }
 
 /// Convert orbital velocity magnitude (m/s) and gravitational parameter μ (m³/s²)
