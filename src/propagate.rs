@@ -227,6 +227,203 @@ pub fn two_body(state: &StateVector, mu: f64, total_time: f64, dt: f64) -> Resul
     cowell(state, mu, total_time, dt, None)
 }
 
+// ── Encke's method ────────────────────────────────────────────────────────
+
+/// Propagate using Encke's method: integrate the deviation from a reference
+/// two-body orbit.
+///
+/// More accurate than Cowell for nearly-Keplerian orbits because the integrator
+/// handles only the small perturbation deviation, not the full gravity field.
+///
+/// # Arguments
+///
+/// * `elements` — Initial orbital elements (elliptical only).
+/// * `mu` — Central body gravitational parameter (m³/s²).
+/// * `total_time` — Propagation time (seconds).
+/// * `dt` — Integration time step (seconds).
+/// * `perturbation` — Perturbation acceleration function.
+///
+/// # Errors
+///
+/// Returns errors if elements are not elliptical or parameters are invalid.
+#[must_use = "returns the propagated state vector"]
+#[instrument(level = "debug", skip(elements, perturbation))]
+pub fn encke(
+    elements: &crate::orbit::OrbitalElements,
+    mu: f64,
+    total_time: f64,
+    dt: f64,
+    perturbation: &PerturbationFn,
+) -> Result<StateVector> {
+    if mu <= 0.0 {
+        return Err(FalakError::InvalidParameter(
+            format!("mu must be positive, got {mu}").into(),
+        ));
+    }
+    if dt <= 0.0 {
+        return Err(FalakError::InvalidParameter(
+            format!("time step must be positive, got {dt}").into(),
+        ));
+    }
+    if !elements.is_elliptical() {
+        return Err(FalakError::InvalidParameter(
+            "Encke's method requires elliptical reference orbit".into(),
+        ));
+    }
+
+    // Deviation from reference: δr, δv
+    let mut dr = [0.0; 3];
+    let mut dv = [0.0; 3];
+    let mut t = 0.0;
+
+    while t < total_time {
+        let step_dt = dt.min(total_time - t);
+
+        // Reference state at current time
+        let ref_state = kepler_to_state(elements, mu, t)?;
+
+        // Actual position = reference + deviation
+        let pos = [
+            ref_state.position[0] + dr[0],
+            ref_state.position[1] + dr[1],
+            ref_state.position[2] + dr[2],
+        ];
+        let vel = [
+            ref_state.velocity[0] + dv[0],
+            ref_state.velocity[1] + dv[1],
+            ref_state.velocity[2] + dv[2],
+        ];
+
+        // Encke acceleration: a_perturb + μ(F(q)·r_ref/r_ref³ - δr/r³)
+        // where F(q) corrects for the difference in inverse-cube terms
+        let r_ref_sq = ref_state.position[0].powi(2)
+            + ref_state.position[1].powi(2)
+            + ref_state.position[2].powi(2);
+        let r_sq = pos[0].powi(2) + pos[1].powi(2) + pos[2].powi(2);
+
+        // Battin's F(q) function for numerical stability
+        let q = (dr[0] * (dr[0] - 2.0 * pos[0])
+            + dr[1] * (dr[1] - 2.0 * pos[1])
+            + dr[2] * (dr[2] - 2.0 * pos[2]))
+            / r_sq;
+        let fq = q * (3.0 + 3.0 * q + q * q) / (1.0 + (1.0 + q).sqrt().powi(3));
+
+        let r_ref_3 = r_ref_sq * r_ref_sq.sqrt();
+        let a_perturb = perturbation(pos, vel, t);
+
+        // Deviation acceleration
+        let mut da = [0.0; 3];
+        for i in 0..3 {
+            da[i] = a_perturb[i] - mu / r_ref_3 * (dr[i] + fq * ref_state.position[i]);
+        }
+
+        // RK4 on the deviation
+        encke_rk4_step(&mut dr, &mut dv, &da, step_dt, |dr_t, dv_t| {
+            let ref_t =
+                kepler_to_state(elements, mu, t + step_dt * 0.5).unwrap_or(ref_state.clone());
+            let pos_t = [
+                ref_t.position[0] + dr_t[0],
+                ref_t.position[1] + dr_t[1],
+                ref_t.position[2] + dr_t[2],
+            ];
+            let vel_t = [
+                ref_t.velocity[0] + dv_t[0],
+                ref_t.velocity[1] + dv_t[1],
+                ref_t.velocity[2] + dv_t[2],
+            ];
+            let r_sq_t = pos_t[0].powi(2) + pos_t[1].powi(2) + pos_t[2].powi(2);
+            let q_t = (dr_t[0] * (dr_t[0] - 2.0 * pos_t[0])
+                + dr_t[1] * (dr_t[1] - 2.0 * pos_t[1])
+                + dr_t[2] * (dr_t[2] - 2.0 * pos_t[2]))
+                / r_sq_t;
+            let fq_t = q_t * (3.0 + 3.0 * q_t + q_t * q_t) / (1.0 + (1.0 + q_t).sqrt().powi(3));
+            let r_ref_sq_t =
+                ref_t.position[0].powi(2) + ref_t.position[1].powi(2) + ref_t.position[2].powi(2);
+            let r_ref_3_t = r_ref_sq_t * r_ref_sq_t.sqrt();
+            let ap = perturbation(pos_t, vel_t, t + step_dt * 0.5);
+            let mut a = [0.0; 3];
+            for i in 0..3 {
+                a[i] = ap[i] - mu / r_ref_3_t * (dr_t[i] + fq_t * ref_t.position[i]);
+            }
+            a
+        });
+
+        t += step_dt;
+    }
+
+    // Final state = reference at total_time + deviation
+    let ref_final = kepler_to_state(elements, mu, total_time)?;
+    Ok(StateVector {
+        position: [
+            ref_final.position[0] + dr[0],
+            ref_final.position[1] + dr[1],
+            ref_final.position[2] + dr[2],
+        ],
+        velocity: [
+            ref_final.velocity[0] + dv[0],
+            ref_final.velocity[1] + dv[1],
+            ref_final.velocity[2] + dv[2],
+        ],
+    })
+}
+
+/// Simplified RK4 step for Encke deviation integration.
+fn encke_rk4_step(
+    dr: &mut [f64; 3],
+    dv: &mut [f64; 3],
+    da0: &[f64; 3],
+    dt: f64,
+    mid_accel: impl Fn([f64; 3], [f64; 3]) -> [f64; 3],
+) {
+    let k1v = *da0;
+    let k1x = *dv;
+
+    let dr2 = [
+        dr[0] + 0.5 * dt * k1x[0],
+        dr[1] + 0.5 * dt * k1x[1],
+        dr[2] + 0.5 * dt * k1x[2],
+    ];
+    let dv2 = [
+        dv[0] + 0.5 * dt * k1v[0],
+        dv[1] + 0.5 * dt * k1v[1],
+        dv[2] + 0.5 * dt * k1v[2],
+    ];
+    let k2v = mid_accel(dr2, dv2);
+    let k2x = dv2;
+
+    let dr3 = [
+        dr[0] + 0.5 * dt * k2x[0],
+        dr[1] + 0.5 * dt * k2x[1],
+        dr[2] + 0.5 * dt * k2x[2],
+    ];
+    let dv3 = [
+        dv[0] + 0.5 * dt * k2v[0],
+        dv[1] + 0.5 * dt * k2v[1],
+        dv[2] + 0.5 * dt * k2v[2],
+    ];
+    let k3v = mid_accel(dr3, dv3);
+    let k3x = dv3;
+
+    let dr4 = [
+        dr[0] + dt * k3x[0],
+        dr[1] + dt * k3x[1],
+        dr[2] + dt * k3x[2],
+    ];
+    let dv4 = [
+        dv[0] + dt * k3v[0],
+        dv[1] + dt * k3v[1],
+        dv[2] + dt * k3v[2],
+    ];
+    let k4v = mid_accel(dr4, dv4);
+    let k4x = dv4;
+
+    let dt6 = dt / 6.0;
+    for i in 0..3 {
+        dr[i] += dt6 * (k1x[i] + 2.0 * k2x[i] + 2.0 * k3x[i] + k4x[i]);
+        dv[i] += dt6 * (k1v[i] + 2.0 * k2v[i] + 2.0 * k3v[i] + k4v[i]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +591,40 @@ mod tests {
         let state = leo_state();
         assert!(cowell(&state, -1.0, 100.0, 10.0, None).is_err());
         assert!(cowell(&state, MU_EARTH, 100.0, -1.0, None).is_err());
+    }
+
+    // ── Encke propagation ────────────────────────────────────────────
+
+    #[test]
+    fn encke_matches_cowell_j2() {
+        let elem = leo_elements();
+        let state = leo_state();
+        let dt_prop = 500.0;
+
+        let j2_perturb = |pos: [f64; 3], _vel: [f64; 3], _t: f64| -> [f64; 3] {
+            crate::perturbation::j2_acceleration(
+                pos,
+                MU_EARTH,
+                crate::perturbation::J2_EARTH,
+                crate::perturbation::R_EARTH,
+            )
+        };
+
+        let cowell_result = cowell(&state, MU_EARTH, dt_prop, 1.0, Some(&j2_perturb)).unwrap();
+        let encke_result = encke(&elem, MU_EARTH, dt_prop, 1.0, &j2_perturb).unwrap();
+
+        // Should agree within ~1 km over 500s with J2
+        for i in 0..3 {
+            let diff = (cowell_result.position[i] - encke_result.position[i]).abs();
+            assert!(diff < 1000.0, "position[{i}] diff: {diff} m");
+        }
+    }
+
+    #[test]
+    fn encke_invalid() {
+        let elem = leo_elements();
+        let no_perturb = |_p: [f64; 3], _v: [f64; 3], _t: f64| -> [f64; 3] { [0.0; 3] };
+        assert!(encke(&elem, -1.0, 100.0, 10.0, &no_perturb).is_err());
+        assert!(encke(&elem, MU_EARTH, 100.0, -1.0, &no_perturb).is_err());
     }
 }

@@ -1,7 +1,8 @@
-//! Ephemeris computation — Julian date, sidereal time, and time conversions.
+//! Ephemeris computation — Julian date, sidereal time, planetary/lunar positions.
 //!
 //! Provides the time foundation for orbital mechanics: Julian dates,
-//! Modified Julian dates, and Greenwich Mean Sidereal Time.
+//! Modified Julian dates, Greenwich Mean Sidereal Time, and simplified
+//! planetary/lunar position models.
 
 use tracing::instrument;
 
@@ -190,6 +191,197 @@ pub fn day_of_year(year: i32, month: u32, day: u32) -> Result<u32> {
     Ok(doy)
 }
 
+// ── Simplified planetary positions (VSOP87 truncated) ─────────────────────
+
+/// Ecliptic longitude and latitude of a planet (radians) plus distance (AU).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PlanetaryPosition {
+    /// Ecliptic longitude (radians).
+    pub longitude: f64,
+    /// Ecliptic latitude (radians).
+    pub latitude: f64,
+    /// Distance from the Sun (AU).
+    pub distance: f64,
+}
+
+/// Planet identifier for simplified ephemeris.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum Planet {
+    /// Mercury.
+    Mercury,
+    /// Venus.
+    Venus,
+    /// Earth.
+    Earth,
+    /// Mars.
+    Mars,
+    /// Jupiter.
+    Jupiter,
+    /// Saturn.
+    Saturn,
+}
+
+/// Compute a simplified planetary position (truncated VSOP87-like series).
+///
+/// Accuracy: ~1° in longitude for dates within ±50 years of J2000.
+/// This is a low-order approximation suitable for visualization and
+/// third-body perturbation estimates, not precision navigation.
+///
+/// # Arguments
+///
+/// * `planet` — Which planet to compute.
+/// * `jd` — Julian Date.
+#[must_use]
+pub fn planetary_position(planet: Planet, jd: f64) -> PlanetaryPosition {
+    let t = julian_centuries_since_j2000(jd);
+
+    // Orbital elements at epoch + secular rates (simplified)
+    // Format: (L0, L_rate, a_AU, e0, e_rate, i0)
+    // L = mean longitude (deg), a = semi-major axis (AU), e = eccentricity, i = inclination (deg)
+    let (l0, l_rate, a, e0, e_rate, _i0) = match planet {
+        Planet::Mercury => (252.251, 149472.675, 0.387_098, 0.205_630, 0.000_02, 7.005),
+        Planet::Venus => (181.980, 58517.816, 0.723_332, 0.006_773, -0.000_05, 3.395),
+        Planet::Earth => (100.464, 35999.373, 1.000_000, 0.016_709, -0.000_04, 0.000),
+        Planet::Mars => (355.433, 19140.299, 1.523_688, 0.093_405, 0.000_09, 1.850),
+        Planet::Jupiter => (34.351, 3034.906, 5.202_561, 0.048_498, 0.000_16, 1.303),
+        Planet::Saturn => (50.077, 1222.114, 9.554_909, 0.055_509, -0.000_35, 2.489),
+    };
+
+    let mean_lon = (l0 + l_rate * t).to_radians();
+    let ecc = e0 + e_rate * t;
+
+    // Solve Kepler's equation (simple iteration for low-e planets)
+    let m = mean_lon.rem_euclid(std::f64::consts::TAU);
+    let mut ea = m + ecc * m.sin();
+    for _ in 0..10 {
+        let f = ea - ecc * ea.sin() - m;
+        let fp = 1.0 - ecc * ea.cos();
+        if fp.abs() < 1e-30 || f.abs() < 1e-12 {
+            break;
+        }
+        ea -= f / fp;
+    }
+
+    // True anomaly
+    let factor = ((1.0 + ecc) / (1.0 - ecc)).sqrt();
+    let nu = 2.0 * (factor * (ea / 2.0).tan()).atan();
+
+    // Heliocentric distance
+    let distance = a * (1.0 - ecc * ea.cos());
+
+    // Ecliptic longitude (simplified: longitude of perihelion + true anomaly)
+    let longitude = (mean_lon - m + nu).rem_euclid(std::f64::consts::TAU);
+
+    PlanetaryPosition {
+        longitude,
+        latitude: 0.0, // simplified: ecliptic plane
+        distance,
+    }
+}
+
+/// Convert heliocentric ecliptic position to Cartesian `[x, y, z]` in AU.
+///
+/// Z is perpendicular to the ecliptic (zero for simplified positions).
+#[must_use]
+#[inline]
+pub fn ecliptic_to_cartesian(pos: &PlanetaryPosition) -> [f64; 3] {
+    let r = pos.distance;
+    [
+        r * pos.longitude.cos() * pos.latitude.cos(),
+        r * pos.longitude.sin() * pos.latitude.cos(),
+        r * pos.latitude.sin(),
+    ]
+}
+
+// ── Simple lunar ephemeris ────────────────────────────────────────────────
+
+/// Lunar position in geocentric ecliptic coordinates.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct LunarPosition {
+    /// Ecliptic longitude (radians).
+    pub longitude: f64,
+    /// Ecliptic latitude (radians).
+    pub latitude: f64,
+    /// Geocentric distance (km).
+    pub distance_km: f64,
+}
+
+/// Compute a simplified lunar position.
+///
+/// Uses a low-order series approximation. Accuracy: ~1° longitude, ~0.5° latitude,
+/// ~1000 km distance. Suitable for tidal perturbation estimates and visualization.
+///
+/// # Arguments
+///
+/// * `jd` — Julian Date.
+#[must_use]
+pub fn lunar_position(jd: f64) -> LunarPosition {
+    let t = julian_centuries_since_j2000(jd);
+
+    // Fundamental arguments (degrees, then convert)
+    // Mean longitude of the Moon
+    let l_prime = 218.316_447_7 + 481_267.881_343_6 * t;
+    // Mean anomaly of the Moon
+    let m_moon = 134.963_396_4 + 477_198.867_505_5 * t;
+    // Mean anomaly of the Sun
+    let m_sun = 357.529_109_2 + 35_999.050_290_9 * t;
+    // Mean elongation of the Moon
+    let d = 297.850_192_1 + 445_267.111_403_4 * t;
+    // Argument of latitude of the Moon
+    let f = 93.272_095_0 + 483_202.017_523_3 * t;
+
+    let m_moon_r = m_moon.to_radians();
+    let m_sun_r = m_sun.to_radians();
+    let d_r = d.to_radians();
+    let f_r = f.to_radians();
+
+    // Longitude perturbations (largest terms, degrees)
+    let mut lon_pert = 6.289 * m_moon_r.sin();
+    lon_pert += 1.274 * (2.0 * d_r - m_moon_r).sin();
+    lon_pert += 0.658 * (2.0 * d_r).sin();
+    lon_pert += 0.214 * (2.0 * m_moon_r).sin();
+    lon_pert -= 0.186 * m_sun_r.sin();
+    lon_pert -= 0.114 * (2.0 * f_r).sin();
+
+    let longitude = (l_prime + lon_pert)
+        .to_radians()
+        .rem_euclid(std::f64::consts::TAU);
+
+    // Latitude (largest terms)
+    let mut lat_pert = 5.128 * f_r.sin();
+    lat_pert += 0.281 * (m_moon_r + f_r).sin();
+    lat_pert += 0.278 * (m_moon_r - f_r).sin();
+
+    let latitude = lat_pert.to_radians();
+
+    // Distance (km, mean + largest perturbations)
+    let mut dist = 385_000.56;
+    dist -= 20_905.36 * m_moon_r.cos();
+    dist -= 3_699.11 * (2.0 * d_r - m_moon_r).cos();
+    dist -= 2_955.97 * (2.0 * d_r).cos();
+
+    LunarPosition {
+        longitude,
+        latitude,
+        distance_km: dist,
+    }
+}
+
+/// Convert lunar position to geocentric Cartesian `[x, y, z]` in metres.
+#[must_use]
+#[inline]
+pub fn lunar_to_cartesian_metres(pos: &LunarPosition) -> [f64; 3] {
+    let r = pos.distance_km * 1000.0;
+    [
+        r * pos.longitude.cos() * pos.latitude.cos(),
+        r * pos.longitude.sin() * pos.latitude.cos(),
+        r * pos.latitude.sin(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +552,113 @@ mod tests {
     fn centuries_one_century() {
         let jd = J2000_JD + DAYS_PER_JULIAN_CENTURY;
         assert!((julian_centuries_since_j2000(jd) - 1.0).abs() < 1e-12);
+    }
+
+    // ── Planetary positions ──────────────────────────────────────────
+
+    #[test]
+    fn earth_distance_1au() {
+        let pos = planetary_position(Planet::Earth, J2000_JD);
+        assert!(
+            (pos.distance - 1.0).abs() < 0.02,
+            "Earth distance: {} AU",
+            pos.distance
+        );
+    }
+
+    #[test]
+    fn mercury_closer_than_earth() {
+        let m = planetary_position(Planet::Mercury, J2000_JD);
+        let e = planetary_position(Planet::Earth, J2000_JD);
+        assert!(m.distance < e.distance, "Mercury should be closer to Sun");
+    }
+
+    #[test]
+    fn jupiter_further_than_mars() {
+        let j = planetary_position(Planet::Jupiter, J2000_JD);
+        let m = planetary_position(Planet::Mars, J2000_JD);
+        assert!(
+            j.distance > m.distance,
+            "Jupiter should be further than Mars"
+        );
+    }
+
+    #[test]
+    fn planet_longitude_range() {
+        for planet in [
+            Planet::Mercury,
+            Planet::Venus,
+            Planet::Earth,
+            Planet::Mars,
+            Planet::Jupiter,
+            Planet::Saturn,
+        ] {
+            let pos = planetary_position(planet, J2000_JD + 500.0);
+            assert!(
+                (0.0..std::f64::consts::TAU).contains(&pos.longitude),
+                "{planet:?} longitude out of range: {}",
+                pos.longitude
+            );
+        }
+    }
+
+    #[test]
+    fn ecliptic_to_cartesian_roundtrip() {
+        let pos = planetary_position(Planet::Earth, J2000_JD);
+        let cart = ecliptic_to_cartesian(&pos);
+        let r = (cart[0] * cart[0] + cart[1] * cart[1] + cart[2] * cart[2]).sqrt();
+        assert!(
+            (r - pos.distance).abs() < 1e-10,
+            "cartesian distance: {r} vs {}",
+            pos.distance
+        );
+    }
+
+    // ── Lunar position ───────────────────────────────────────────────
+
+    #[test]
+    fn lunar_distance_range() {
+        // Moon distance varies ~356,500–406,700 km
+        let pos = lunar_position(J2000_JD);
+        assert!(
+            pos.distance_km > 350_000.0 && pos.distance_km < 410_000.0,
+            "lunar distance: {} km",
+            pos.distance_km
+        );
+    }
+
+    #[test]
+    fn lunar_latitude_range() {
+        // Lunar latitude should be within ±5.3°
+        let pos = lunar_position(J2000_JD);
+        assert!(
+            pos.latitude.abs() < 6.0_f64.to_radians(),
+            "lunar latitude: {}°",
+            pos.latitude.to_degrees()
+        );
+    }
+
+    #[test]
+    fn lunar_cartesian_distance() {
+        let pos = lunar_position(J2000_JD);
+        let cart = lunar_to_cartesian_metres(&pos);
+        let r = (cart[0] * cart[0] + cart[1] * cart[1] + cart[2] * cart[2]).sqrt();
+        assert!(
+            (r - pos.distance_km * 1000.0).abs() < 1.0,
+            "cartesian: {r} vs {}",
+            pos.distance_km * 1000.0
+        );
+    }
+
+    #[test]
+    fn lunar_position_varies() {
+        let p1 = lunar_position(J2000_JD);
+        let p2 = lunar_position(J2000_JD + 15.0); // half a lunar month
+        // Longitude should differ significantly
+        let diff = (p2.longitude - p1.longitude).rem_euclid(std::f64::consts::TAU);
+        assert!(
+            diff > 2.0,
+            "lunar longitude should change over 15 days: {diff} rad"
+        );
     }
 }

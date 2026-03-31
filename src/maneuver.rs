@@ -59,6 +59,74 @@ impl ImpulsiveBurn {
     }
 }
 
+/// A burn scheduled at a specific time.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ScheduledBurn {
+    /// Time offset from plan start (seconds).
+    pub time: f64,
+    /// The burn itself.
+    pub burn: ImpulsiveBurn,
+}
+
+/// A maneuver plan: an ordered sequence of timed burns.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ManeuverPlan {
+    /// Ordered sequence of burns (sorted by time).
+    pub burns: Vec<ScheduledBurn>,
+    /// Total delta-v budget (m/s).
+    pub total_delta_v: f64,
+    /// Total time span from first to last burn (seconds).
+    pub total_time: f64,
+}
+
+impl ManeuverPlan {
+    /// Create a new empty maneuver plan.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            burns: Vec::new(),
+            total_delta_v: 0.0,
+            total_time: 0.0,
+        }
+    }
+
+    /// Add a burn at a given time offset. Burns are kept sorted by time.
+    pub fn add_burn(&mut self, time: f64, burn: ImpulsiveBurn) {
+        self.total_delta_v += burn.magnitude;
+        self.burns.push(ScheduledBurn { time, burn });
+        self.burns.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if let (Some(first), Some(last)) = (self.burns.first(), self.burns.last()) {
+            self.total_time = last.time - first.time;
+        }
+    }
+
+    /// Number of burns in the plan.
+    #[must_use]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.burns.len()
+    }
+
+    /// Whether the plan has no burns.
+    #[must_use]
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.burns.is_empty()
+    }
+}
+
+impl Default for ManeuverPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Delta-v budget ────────────────────────────────────────────────────────
 
 /// Compute the total delta-v required for a sequence of burns.
@@ -219,6 +287,43 @@ mod tests {
     fn burn_combined() {
         let b = ImpulsiveBurn::new(3.0, 4.0, 0.0);
         assert!((b.magnitude - 5.0).abs() < 1e-10);
+    }
+
+    // ── ManeuverPlan ──────────────────────────────────────────────────
+
+    #[test]
+    fn plan_empty() {
+        let plan = ManeuverPlan::new();
+        assert!(plan.is_empty());
+        assert_eq!(plan.len(), 0);
+        assert!((plan.total_delta_v).abs() < 1e-15);
+    }
+
+    #[test]
+    fn plan_add_burns() {
+        let mut plan = ManeuverPlan::new();
+        plan.add_burn(0.0, ImpulsiveBurn::prograde(100.0));
+        plan.add_burn(3600.0, ImpulsiveBurn::prograde(200.0));
+        assert_eq!(plan.len(), 2);
+        assert!((plan.total_delta_v - 300.0).abs() < 1e-10);
+        assert!((plan.total_time - 3600.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn plan_sorts_by_time() {
+        let mut plan = ManeuverPlan::new();
+        plan.add_burn(200.0, ImpulsiveBurn::prograde(50.0));
+        plan.add_burn(100.0, ImpulsiveBurn::prograde(100.0));
+        plan.add_burn(300.0, ImpulsiveBurn::retrograde(75.0));
+        assert!((plan.burns[0].time - 100.0).abs() < 1e-10);
+        assert!((plan.burns[1].time - 200.0).abs() < 1e-10);
+        assert!((plan.burns[2].time - 300.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn plan_default() {
+        let plan = ManeuverPlan::default();
+        assert!(plan.is_empty());
     }
 
     #[test]

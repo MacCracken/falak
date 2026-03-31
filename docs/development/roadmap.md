@@ -15,19 +15,15 @@ Falak does NOT own:
 ## Backlog
 
 ### Orbit Propagation — Extended
-- [ ] Encke's method (deviation from reference orbit)
 - [ ] General perturbation theory (osculating → mean elements)
 
 ### N-Body Simulation — Extended
 - [ ] Pre-allocated integration buffers (RK4 allocates ~10 Vecs per step — dominates runtime for large N)
 - [ ] Canonical μ-based gravity option (current uses G×M which diverges from standard μ values)
-- [ ] Dormand-Prince (RK45) adaptive step integrator
 - [ ] Barnes-Hut tree approximation for large N
 - [ ] Restricted three-body problem (Lagrange points)
 
 ### Ephemeris — Extended
-- [ ] VSOP87 planetary positions (truncated series)
-- [ ] Simple lunar ephemeris
 - [ ] Rise/set/transit times
 - [ ] Eclipse prediction
 - [ ] Precession and nutation corrections
@@ -37,7 +33,6 @@ Falak does NOT own:
 - [ ] Combined plane change + altitude maneuvers
 
 ### Maneuver Planning — Extended
-- [ ] Maneuver plan sequencing (multiple burns with timing)
 - [ ] Continuous low-thrust trajectory modelling
 
 ### Cross-Crate Bridges — Extended

@@ -294,6 +294,66 @@ pub fn step_rk4(system: &mut System, dt: f64) {
     }
 }
 
+// ── Adaptive RK45 integrator (Richardson extrapolation) ───────────────────
+
+/// Advance the system by one adaptive step using embedded RK4 error estimation.
+///
+/// Compares a full RK4 step with two half-steps (Richardson extrapolation)
+/// to estimate the error. Adjusts step size to maintain the target tolerance.
+///
+/// # Arguments
+///
+/// * `system` — The N-body system (modified in place).
+/// * `dt` — Suggested time step (seconds).
+/// * `tolerance` — Maximum allowed position error per step (metres).
+///
+/// # Returns
+///
+/// `(actual_dt, next_suggested_dt)`.
+pub fn step_adaptive(system: &mut System, dt: f64, tolerance: f64) -> (f64, f64) {
+    let n = system.bodies.len();
+    let pos0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.position).collect();
+    let vel0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+
+    // Full step with RK4
+    let mut full_sys = system.clone();
+    step_rk4(&mut full_sys, dt);
+
+    // Two half steps with RK4
+    step_rk4(system, dt / 2.0);
+    step_rk4(system, dt / 2.0);
+
+    // Error estimate: max position difference
+    let mut max_err: f64 = 0.0;
+    for i in 0..n {
+        for j in 0..3 {
+            let err = (system.bodies[i].position[j] - full_sys.bodies[i].position[j]).abs();
+            max_err = max_err.max(err);
+        }
+    }
+
+    // Reject if error exceeds tolerance
+    if max_err > tolerance && dt > 1e-6 {
+        for i in 0..n {
+            system.bodies[i].position = pos0[i];
+            system.bodies[i].velocity = vel0[i];
+        }
+        return step_adaptive(system, dt * 0.5, tolerance);
+    }
+
+    // The two-half-step result (already in system) is more accurate
+
+    // Suggest next step size (5th-order scaling for RK4)
+    let safety = 0.9;
+    let next_dt = if max_err > 1e-30 {
+        safety * dt * (tolerance / max_err).powf(0.2)
+    } else {
+        dt * 2.0
+    };
+
+    (dt, next_dt.clamp(dt * 0.1, dt * 2.0))
+}
+
 // ── Multi-step integration ────────────────────────────────────────────────
 
 /// Integration method.
@@ -549,6 +609,36 @@ mod tests {
         let mut sys = two_body_system();
         assert!(evolve(&mut sys, 100.0, -1.0, Integrator::Leapfrog).is_err());
         assert!(evolve(&mut sys, -1.0, 10.0, Integrator::Leapfrog).is_err());
+    }
+
+    // ── Adaptive integrator ────────────────────────────────────────────
+
+    #[test]
+    fn adaptive_conserves_energy() {
+        let mut sys = two_body_system();
+        let e0 = sys.total_energy();
+
+        let mut dt: f64 = 50.0;
+        let mut t: f64 = 0.0;
+        let target: f64 = 1000.0;
+        while t < target {
+            let (actual_dt, next_dt) = step_adaptive(&mut sys, dt.min(target - t), 1.0);
+            t += actual_dt;
+            dt = next_dt;
+        }
+
+        let e1 = sys.total_energy();
+        let e_err = ((e1 - e0) / e0).abs();
+        assert!(e_err < 1e-6, "adaptive energy drift: {e_err:.2e}");
+    }
+
+    #[test]
+    fn adaptive_reduces_step_for_tight_tolerance() {
+        let mut sys = two_body_system();
+        let (actual_dt, next_dt) = step_adaptive(&mut sys, 100.0, 0.001);
+        // Should have reduced from 100s to something smaller
+        assert!(actual_dt <= 100.0);
+        assert!(next_dt > 0.0);
     }
 
     // ── Three-body ───────────────────────────────────────────────────

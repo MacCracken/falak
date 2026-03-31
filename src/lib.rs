@@ -20,7 +20,7 @@
 //!
 //! - [`transfer`] — Hohmann, bi-elliptic, plane change, phasing maneuvers
 //! - [`frame`] — Reference frames (ECI, ECEF, perifocal, rotating, geodetic)
-//! - [`ephemeris`] — Julian date, sidereal time, calendar conversions
+//! - [`ephemeris`] — Julian date, sidereal time, planetary/lunar positions
 //!
 //! - [`perturbation`] — J2/J3, drag, SRP, third-body perturbation accelerations
 //! - [`maneuver`] — Impulsive burns, rocket equation, escape/capture delta-v
@@ -51,7 +51,7 @@ pub mod perturbation;
 /// N-body gravitational simulation — direct summation, leapfrog, RK4.
 pub mod nbody;
 
-/// Ephemeris computation — Julian date, sidereal time, calendar conversions.
+/// Ephemeris computation — Julian date, sidereal time, planetary/lunar positions.
 pub mod ephemeris;
 
 /// Reference frames — ECI, ECEF, perifocal, rotating, geodetic.
