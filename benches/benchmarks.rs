@@ -84,6 +84,43 @@ fn transfer_functions(c: &mut Criterion) {
     });
 }
 
+fn frame_transforms(c: &mut Criterion) {
+    c.bench_function("perifocal_to_eci", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::frame::perifocal_to_eci(
+                [7e6, 3e6, 0.0],
+                1.2,
+                0.8,
+                0.5,
+            ));
+        });
+    });
+
+    c.bench_function("ecef_to_geodetic", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::frame::ecef_to_geodetic([
+                4_000_000.0,
+                3_000_000.0,
+                4_500_000.0,
+            ]));
+        });
+    });
+}
+
+fn ephemeris_functions(c: &mut Criterion) {
+    c.bench_function("calendar_to_jd", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::ephemeris::calendar_to_jd(2024, 7, 15.75));
+        });
+    });
+
+    c.bench_function("gmst", |b| {
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::ephemeris::gmst(2_451_545.0));
+        });
+    });
+}
+
 fn bridge_functions(c: &mut Criterion) {
     c.bench_function("stellar_mass_to_mu", |b| {
         b.iter(|| {
@@ -110,6 +147,8 @@ criterion_group!(
     anomaly_conversions,
     state_vector_roundtrip,
     transfer_functions,
+    frame_transforms,
+    ephemeris_functions,
     bridge_functions,
 );
 criterion_main!(benches);

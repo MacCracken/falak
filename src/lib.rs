@@ -18,9 +18,11 @@
 //! - [`integration`] — Downstream consumer APIs (soorat rendering)
 //!
 //! - [`transfer`] — Hohmann, bi-elliptic, plane change, phasing maneuvers
+//! - [`frame`] — Reference frames (ECI, ECEF, perifocal, rotating, geodetic)
+//! - [`ephemeris`] — Julian date, sidereal time, calendar conversions
 //!
 //! ### Stubs (not yet implemented)
-//! - [`perturbation`], [`nbody`], [`ephemeris`], [`frame`], [`maneuver`]
+//! - [`perturbation`], [`nbody`], [`maneuver`]
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
@@ -44,10 +46,10 @@ pub mod perturbation;
 /// N-body gravitational simulation (stub — not yet implemented).
 pub mod nbody;
 
-/// Ephemeris computation (stub — not yet implemented).
+/// Ephemeris computation — Julian date, sidereal time, calendar conversions.
 pub mod ephemeris;
 
-/// Reference frames (stub — not yet implemented).
+/// Reference frames — ECI, ECEF, perifocal, rotating, geodetic.
 pub mod frame;
 
 /// Spacecraft maneuvers (stub — not yet implemented).
