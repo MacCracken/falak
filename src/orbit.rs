@@ -12,7 +12,8 @@ use crate::error::{FalakError, Result};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OrbitalElements {
-    /// Semi-major axis (distance units).
+    /// Semi-major axis (distance units). For parabolic orbits (e = 1), this
+    /// field stores the semi-latus rectum *p* instead, since *a* is undefined.
     pub semi_major_axis: f64,
 
     /// Eccentricity (dimensionless, 0 = circular, 0..1 = elliptical,

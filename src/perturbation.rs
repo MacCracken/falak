@@ -168,6 +168,37 @@ pub struct AtmosphereParams {
     pub r_body: f64,
 }
 
+impl AtmosphereParams {
+    /// Create a new set of atmosphere parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `cd` — Drag coefficient (typically 2.0–2.5)
+    /// * `area_mass_ratio` — Cross-sectional area / mass (m²/kg)
+    /// * `rho0` — Reference atmospheric density (kg/m³)
+    /// * `h0` — Reference altitude (metres)
+    /// * `h_scale` — Scale height (metres)
+    /// * `r_body` — Central body radius (metres)
+    #[must_use]
+    pub fn new(
+        cd: f64,
+        area_mass_ratio: f64,
+        rho0: f64,
+        h0: f64,
+        h_scale: f64,
+        r_body: f64,
+    ) -> Self {
+        Self {
+            cd,
+            area_mass_ratio,
+            rho0,
+            h0,
+            h_scale,
+            r_body,
+        }
+    }
+}
+
 /// Compute atmospheric drag acceleration.
 ///
 /// Uses an exponential atmosphere model. Drag opposes the velocity vector.
@@ -470,16 +501,16 @@ mod tests {
 
     #[test]
     fn third_body_tidal() {
-        // Moon at ~384400 km, satellite at LEO → small perturbation
+        // Moon at ~384400 km, satellite at LEO → small tidal perturbation
+        // Expected: ~μ_moon × r_sat / r_moon³ ≈ 4.9e12 × 6.8e6 / (3.844e8)³ ≈ 5.9e-7 m/s²
         let sat = [R_EARTH + 400e3, 0.0, 0.0];
         let moon = [384_400e3, 0.0, 0.0];
         let mu_moon = 4.902_800e12;
         let acc = third_body_acceleration(sat, moon, mu_moon);
         let mag = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
-        // Lunar perturbation at LEO: ~1e-6 m/s²
         assert!(
-            mag > 1e-8 && mag < 1e-4,
-            "lunar perturbation magnitude: {mag}"
+            mag > 1e-7 && mag < 1e-5,
+            "lunar perturbation magnitude: {mag} m/s² (expected ~6e-7)"
         );
     }
 

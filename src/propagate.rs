@@ -80,9 +80,18 @@ pub fn kepler_to_state(
 
 // ── Cowell's method (perturbed propagation) ───────────────────────────────
 
-/// Perturbation force function signature.
+/// Perturbation acceleration function signature.
 ///
-/// Takes `(position, velocity, time)` and returns acceleration `[ax, ay, az]`.
+/// # Parameters
+///
+/// * `position` — Satellite position `[x, y, z]` in ECI (metres)
+/// * `velocity` — Satellite velocity `[vx, vy, vz]` in ECI (m/s)
+/// * `time` — Elapsed time since propagation start (seconds)
+///
+/// # Returns
+///
+/// Perturbation acceleration `[ax, ay, az]` in m/s². This is added to the
+/// two-body gravitational acceleration during numerical integration.
 pub type PerturbationFn = dyn Fn([f64; 3], [f64; 3], f64) -> [f64; 3];
 
 /// Propagate a state vector with perturbations using Cowell's method (RK4).
@@ -610,6 +619,78 @@ mod tests {
             let diff = (cowell_result.position[i] - encke_result.position[i]).abs();
             assert!(diff < 1000.0, "position[{i}] diff: {diff} m");
         }
+    }
+
+    #[test]
+    fn encke_high_eccentricity() {
+        // Molniya-like orbit: high eccentricity (e=0.74), verify Encke stays stable
+        let elem = crate::orbit::OrbitalElements::new(26_560e3, 0.74, 1.1, 0.0, 4.7, 0.0).unwrap();
+        let state = crate::kepler::elements_to_state(&elem, MU_EARTH).unwrap();
+
+        let j2_perturb = |pos: [f64; 3], _vel: [f64; 3], _t: f64| -> [f64; 3] {
+            crate::perturbation::j2_acceleration(
+                pos,
+                MU_EARTH,
+                crate::perturbation::J2_EARTH,
+                crate::perturbation::R_EARTH,
+            )
+        };
+
+        let dt_prop = 1000.0;
+
+        let cowell_result = cowell(&state, MU_EARTH, dt_prop, 1.0, Some(&j2_perturb)).unwrap();
+        let encke_result = encke(&elem, MU_EARTH, dt_prop, 1.0, &j2_perturb).unwrap();
+
+        // Both should produce finite, physically reasonable results
+        for i in 0..3 {
+            assert!(
+                cowell_result.position[i].is_finite(),
+                "Cowell pos[{i}] is not finite"
+            );
+            assert!(
+                encke_result.position[i].is_finite(),
+                "Encke pos[{i}] is not finite"
+            );
+        }
+
+        // Encke and Cowell should agree within ~5 km for high-e orbit over 1000s
+        for i in 0..3 {
+            let diff = (cowell_result.position[i] - encke_result.position[i]).abs();
+            assert!(
+                diff < 5000.0,
+                "high-e position[{i}] Cowell vs Encke diff: {diff:.1} m"
+            );
+        }
+    }
+
+    #[test]
+    fn encke_very_high_eccentricity() {
+        // e=0.95 — near-parabolic, stress test for deviation tracking
+        let elem = crate::orbit::OrbitalElements::new(40_000e3, 0.95, 0.5, 0.0, 0.0, 0.0).unwrap();
+
+        let j2_perturb = |pos: [f64; 3], _vel: [f64; 3], _t: f64| -> [f64; 3] {
+            crate::perturbation::j2_acceleration(
+                pos,
+                MU_EARTH,
+                crate::perturbation::J2_EARTH,
+                crate::perturbation::R_EARTH,
+            )
+        };
+
+        // Short propagation to avoid periapsis passage instability
+        let dt_prop = 500.0;
+        let encke_result = encke(&elem, MU_EARTH, dt_prop, 1.0, &j2_perturb).unwrap();
+
+        // Result should be finite and at a reasonable distance
+        let r = (encke_result.position[0].powi(2)
+            + encke_result.position[1].powi(2)
+            + encke_result.position[2].powi(2))
+        .sqrt();
+        assert!(r.is_finite(), "result radius is not finite");
+        assert!(
+            r > 1e6 && r < 1e9,
+            "high-e orbit radius should be reasonable, got {r:.0} m"
+        );
     }
 
     #[test]

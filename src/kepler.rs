@@ -292,13 +292,18 @@ pub fn radius_at_true_anomaly(semi_major_axis: f64, eccentricity: f64, true_anom
 
 // ── State vector <--> orbital elements ────────────────────────────────────
 
-/// Cartesian state vector (position and velocity).
+/// Cartesian state vector (position and velocity) in an inertial reference frame.
+///
+/// Coordinates are ECI-like (Earth-Centred Inertial): X points to the vernal
+/// equinox, Z points to the celestial north pole, Y completes the right-handed
+/// triad. For non-Earth central bodies the same convention applies with the
+/// body's spin axis replacing the celestial pole.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct StateVector {
-    /// Position `[x, y, z]` (metres).
+    /// Position `[x, y, z]` in the inertial frame (metres).
     pub position: [f64; 3],
-    /// Velocity `[vx, vy, vz]` (m/s).
+    /// Velocity `[vx, vy, vz]` in the inertial frame (m/s).
     pub velocity: [f64; 3],
 }
 

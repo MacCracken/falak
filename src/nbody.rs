@@ -282,62 +282,78 @@ pub fn step_leapfrog(system: &mut System, dt: f64) {
 pub fn step_rk4(system: &mut System, dt: f64) {
     let n = system.bodies.len();
 
-    // Save initial state
-    let pos0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.position).collect();
-    let vel0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+    // Pre-allocate all scratch space in flat arrays (2 × 4 × n × 3 values)
+    // Layout: [k1, k2, k3, k4] for both position-rates (kx) and velocity-rates (kv)
+    let mut kx = vec![[0.0; 3]; 4 * n]; // position rates (velocities at each stage)
+    let mut kv = vec![[0.0; 3]; 4 * n]; // velocity rates (accelerations at each stage)
+    let mut pos0 = vec![[0.0; 3]; n];
+    let mut vel0 = vec![[0.0; 3]; n];
+    let mut acc = Vec::with_capacity(n);
 
-    // k1
-    let acc1 = compute_accelerations(system);
-    let k1v: Vec<[f64; 3]> = acc1;
-    let k1x: Vec<[f64; 3]> = vel0.clone();
+    // Save initial state
+    for i in 0..n {
+        pos0[i] = system.bodies[i].position;
+        vel0[i] = system.bodies[i].velocity;
+    }
+
+    // k1: rates at initial state
+    compute_accelerations_into(system, &mut acc);
+    kv[..n].copy_from_slice(&acc[..n]);
+    kx[..n].copy_from_slice(&vel0[..n]);
 
     // Set state to x0 + 0.5*dt*k1
     for i in 0..n {
         for k in 0..3 {
-            system.bodies[i].position[k] = pos0[i][k] + 0.5 * dt * k1x[i][k];
-            system.bodies[i].velocity[k] = vel0[i][k] + 0.5 * dt * k1v[i][k];
+            system.bodies[i].position[k] = pos0[i][k] + 0.5 * dt * kx[i][k];
+            system.bodies[i].velocity[k] = vel0[i][k] + 0.5 * dt * kv[i][k];
         }
     }
 
-    // k2
-    let acc2 = compute_accelerations(system);
-    let k2v: Vec<[f64; 3]> = acc2;
-    let k2x: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+    // k2: rates at midpoint via k1
+    compute_accelerations_into(system, &mut acc);
+    for i in 0..n {
+        kv[n + i] = acc[i];
+        kx[n + i] = system.bodies[i].velocity;
+    }
 
     // Set state to x0 + 0.5*dt*k2
     for i in 0..n {
         for k in 0..3 {
-            system.bodies[i].position[k] = pos0[i][k] + 0.5 * dt * k2x[i][k];
-            system.bodies[i].velocity[k] = vel0[i][k] + 0.5 * dt * k2v[i][k];
+            system.bodies[i].position[k] = pos0[i][k] + 0.5 * dt * kx[n + i][k];
+            system.bodies[i].velocity[k] = vel0[i][k] + 0.5 * dt * kv[n + i][k];
         }
     }
 
-    // k3
-    let acc3 = compute_accelerations(system);
-    let k3v: Vec<[f64; 3]> = acc3;
-    let k3x: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+    // k3: rates at midpoint via k2
+    compute_accelerations_into(system, &mut acc);
+    for i in 0..n {
+        kv[2 * n + i] = acc[i];
+        kx[2 * n + i] = system.bodies[i].velocity;
+    }
 
     // Set state to x0 + dt*k3
     for i in 0..n {
         for k in 0..3 {
-            system.bodies[i].position[k] = pos0[i][k] + dt * k3x[i][k];
-            system.bodies[i].velocity[k] = vel0[i][k] + dt * k3v[i][k];
+            system.bodies[i].position[k] = pos0[i][k] + dt * kx[2 * n + i][k];
+            system.bodies[i].velocity[k] = vel0[i][k] + dt * kv[2 * n + i][k];
         }
     }
 
-    // k4
-    let acc4 = compute_accelerations(system);
-    let k4v: Vec<[f64; 3]> = acc4;
-    let k4x: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+    // k4: rates at endpoint via k3
+    compute_accelerations_into(system, &mut acc);
+    for i in 0..n {
+        kv[3 * n + i] = acc[i];
+        kx[3 * n + i] = system.bodies[i].velocity;
+    }
 
     // Combine: x = x0 + (dt/6)(k1 + 2k2 + 2k3 + k4)
     let dt6 = dt / 6.0;
     for i in 0..n {
         for k in 0..3 {
-            system.bodies[i].position[k] =
-                pos0[i][k] + dt6 * (k1x[i][k] + 2.0 * k2x[i][k] + 2.0 * k3x[i][k] + k4x[i][k]);
-            system.bodies[i].velocity[k] =
-                vel0[i][k] + dt6 * (k1v[i][k] + 2.0 * k2v[i][k] + 2.0 * k3v[i][k] + k4v[i][k]);
+            system.bodies[i].position[k] = pos0[i][k]
+                + dt6 * (kx[i][k] + 2.0 * kx[n + i][k] + 2.0 * kx[2 * n + i][k] + kx[3 * n + i][k]);
+            system.bodies[i].velocity[k] = vel0[i][k]
+                + dt6 * (kv[i][k] + 2.0 * kv[n + i][k] + 2.0 * kv[2 * n + i][k] + kv[3 * n + i][k]);
         }
     }
 }
@@ -363,24 +379,39 @@ pub fn step_adaptive(system: &mut System, dt: f64, tolerance: f64) -> (f64, f64)
     let n = system.bodies.len();
     let mut current_dt = dt;
 
+    // Pre-allocate scratch buffers once (avoids system.clone() per attempt)
+    let mut pos0 = vec![[0.0; 3]; n];
+    let mut vel0 = vec![[0.0; 3]; n];
+    let mut full_pos = vec![[0.0; 3]; n];
+    let mut full_vel = vec![[0.0; 3]; n];
+
     // Iterative step reduction (max 30 halvings: dt/2^30 ≈ 1e-9 × dt)
     for _ in 0..30 {
-        let pos0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.position).collect();
-        let vel0: Vec<[f64; 3]> = system.bodies.iter().map(|b| b.velocity).collect();
+        for i in 0..n {
+            pos0[i] = system.bodies[i].position;
+            vel0[i] = system.bodies[i].velocity;
+        }
 
-        // Full step with RK4
-        let mut full_sys = system.clone();
-        step_rk4(&mut full_sys, current_dt);
+        // Full step with RK4, then save result
+        step_rk4(system, current_dt);
+        for i in 0..n {
+            full_pos[i] = system.bodies[i].position;
+            full_vel[i] = system.bodies[i].velocity;
+        }
 
-        // Two half steps with RK4
+        // Restore initial state and do two half steps
+        for i in 0..n {
+            system.bodies[i].position = pos0[i];
+            system.bodies[i].velocity = vel0[i];
+        }
         step_rk4(system, current_dt / 2.0);
         step_rk4(system, current_dt / 2.0);
 
         // Error estimate: max position difference
         let mut max_err: f64 = 0.0;
-        for i in 0..n {
-            for j in 0..3 {
-                let err = (system.bodies[i].position[j] - full_sys.bodies[i].position[j]).abs();
+        for (body, fp) in system.bodies.iter().zip(full_pos.iter()) {
+            for (bp, &fp_k) in body.position.iter().zip(fp.iter()) {
+                let err = (bp - fp_k).abs();
                 max_err = max_err.max(err);
             }
         }

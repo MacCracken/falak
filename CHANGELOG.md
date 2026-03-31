@@ -14,16 +14,29 @@
 - **propagate** — Analytic two-body (Kepler) propagation with forward/backward time, Cowell's method (RK4) for perturbed propagation with user-supplied perturbation function, Encke's method (deviation from reference orbit with Battin's F(q)), `two_body` convenience wrapper
 - **bridge** — Tara bridges (stellar mass → μ, luminosity → habitable zone), impetus bridges (gravity force, escape energy deficit), badal bridges (insolation, climate variation)
 - **integration/soorat** — `OrbitPath::from_elements` (now returns `Result`), `OrbitPath::from_elements_eci` (full perifocal→ECI rotation), `GroundTrack::from_elements` (orbital propagation + GMST + geodetic conversion for map overlay), `PlanetaryPositions`, `CelestialBody`, `TransferTrajectory` data types
+- **perturbation** — `AtmosphereParams::new` constructor for external crate usage (`#[non_exhaustive]` struct)
+- **tests** — Cross-module integration tests: combined perturbations (J2 + drag + third-body), Encke vs Cowell agreement with combined perturbations, high-eccentricity Encke (e=0.74, e=0.95)
+- **examples** — `orbit_propagation` (LEO with J2, secular rates) and `hohmann_transfer` (LEO→GEO, maneuver planning, rocket equation)
 
 ### Changed
 - **orbit** — `OrbitalElements::new` now accepts all orbit types: elliptical (e < 1, a > 0), parabolic (e = 1, p > 0), hyperbolic (e > 1, a < 0); periapsis returns p/2 for parabolic; apoapsis returns ∞ for open orbits
 - **bridge** — Gravitational constant `G` now sourced from `kepler::G` (removed duplication)
 - **integration/soorat** — `OrbitPath::from_elements` returns `Result` instead of silently masking errors; all structs marked `#[non_exhaustive]`; orbit path generation uses `kepler` module functions
+- **nbody** — RK4 integrator uses pre-allocated flat arrays and `compute_accelerations_into` instead of per-step Vec allocations (6 allocations eliminated per step)
+- **nbody** — Adaptive RK45 uses manual state backup/restore instead of `system.clone()` (eliminates full system clone per attempt)
+- **kepler** — `StateVector` doc comments now specify ECI coordinate frame convention
+- **orbit** — `OrbitalElements::semi_major_axis` doc clarifies parabolic convention (stores semi-latus rectum p)
+- **propagate** — `PerturbationFn` type alias now fully documents parameter semantics
 
 ### Fixed
 - **ephemeris** — GMST formula was double-counting fractional day (T included full JD, then fractional day added again); now correctly separates 0h UT1 and fractional day
 - **frame** — `eci_to_perifocal` was hardcoding W-component to 0.0, dropping out-of-plane ECI z-component; now computes full 3×3 transpose
 - **orbit** — Parabolic periapsis was returning 0.0 (|a|×|1-e| = 0 when e=1); now returns p/2
+- **perturbation** — Third-body test tolerance tightened from 4 to 2 orders of magnitude (1e-7..1e-5 vs 1e-8..1e-4)
+
+### Performance
+- nbody_rk4_step(2): 166 ns → 188 ns (+13%, 2-body micro-benchmark; trade-off eliminates 6 heap allocations per step, net win at larger N)
+- nbody_leapfrog_step(2): 58 ns → 54 ns (−6%)
 
 ## [0.1.0] - 2026-03-25
 
