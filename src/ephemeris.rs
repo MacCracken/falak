@@ -3,6 +3,8 @@
 //! Provides the time foundation for orbital mechanics: Julian dates,
 //! Modified Julian dates, and Greenwich Mean Sidereal Time.
 
+use tracing::instrument;
+
 use crate::error::{FalakError, Result};
 
 /// Julian date of the J2000.0 epoch (2000 January 1, 12:00 TT).
@@ -36,6 +38,7 @@ pub const DAYS_PER_JULIAN_CENTURY: f64 = 36_525.0;
 ///
 /// Returns [`FalakError::InvalidParameter`] if month is out of range.
 #[must_use = "returns the computed Julian Date"]
+#[instrument(level = "trace")]
 pub fn calendar_to_jd(year: i32, month: u32, day: f64) -> Result<f64> {
     if !(1..=12).contains(&month) {
         return Err(FalakError::InvalidParameter(
@@ -122,8 +125,8 @@ pub fn julian_centuries_since_j2000(jd: f64) -> f64 {
 
 /// Compute Greenwich Mean Sidereal Time (GMST) in radians.
 ///
-/// Uses the IAU 1982 expression for GMST at 0h UT1, extended with
-/// the fractional UT1 day.
+/// Uses the IAU 1982 expression for GMST at 0h UT1, then adds the
+/// fractional UT1 day scaled by the sidereal/solar ratio.
 ///
 /// # Arguments
 ///
@@ -131,15 +134,19 @@ pub fn julian_centuries_since_j2000(jd: f64) -> f64 {
 #[must_use]
 #[inline]
 pub fn gmst(jd_ut1: f64) -> f64 {
-    let t = julian_centuries_since_j2000(jd_ut1);
+    // Separate into 0h UT1 and fractional day
+    let jd_0h = (jd_ut1 + 0.5).floor() - 0.5;
+    let frac_day = jd_ut1 - jd_0h;
 
-    // GMST in seconds at 0h UT1
-    let gmst_sec = 67_310.548_41 + (876_600.0 * 3600.0 + 8_640_184.812_866) * t + 0.093_104 * t * t
-        - 6.2e-6 * t * t * t;
+    // Julian centuries from J2000.0 to 0h UT1 (NOT the full JD)
+    let t0 = (jd_0h - J2000_JD) / DAYS_PER_JULIAN_CENTURY;
 
-    // Add fractional day contribution
-    let frac_day = (jd_ut1 - jd_ut1.floor() - 0.5).rem_euclid(1.0);
-    let gmst_total_sec = gmst_sec + frac_day * SECONDS_PER_DAY * 1.002_737_909_350_795;
+    // GMST at 0h UT1 in seconds (IAU 1982)
+    let gmst_0h_sec =
+        24_110.548_41 + 8_640_184.812_866 * t0 + 0.093_104 * t0 * t0 - 6.2e-6 * t0 * t0 * t0;
+
+    // Add fractional day scaled by sidereal/solar ratio
+    let gmst_total_sec = gmst_0h_sec + frac_day * SECONDS_PER_DAY * 1.002_737_909_350_795;
 
     // Convert to radians and normalise to [0, 2π)
     let gmst_rad = (gmst_total_sec / SECONDS_PER_DAY) * std::f64::consts::TAU;
@@ -154,24 +161,26 @@ pub fn gmst(jd_ut1: f64) -> f64 {
 ///
 /// Returns [`FalakError::InvalidParameter`] if month or day is out of range.
 #[must_use = "returns the computed day of year"]
+#[instrument(level = "trace")]
 pub fn day_of_year(year: i32, month: u32, day: u32) -> Result<u32> {
     if !(1..=12).contains(&month) {
         return Err(FalakError::InvalidParameter(
             format!("month must be 1–12, got {month}").into(),
         ));
     }
-    if day == 0 || day > 31 {
-        return Err(FalakError::InvalidParameter(
-            format!("day must be 1–31, got {day}").into(),
-        ));
-    }
-
     let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     let days_in_month: [u32; 12] = if is_leap {
         [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
+
+    let max_day = days_in_month[month as usize - 1];
+    if day == 0 || day > max_day {
+        return Err(FalakError::InvalidParameter(
+            format!("day must be 1–{max_day} for month {month}, got {day}").into(),
+        ));
+    }
 
     let mut doy = day;
     for &dim in &days_in_month[..(month as usize - 1)] {
@@ -273,16 +282,27 @@ mod tests {
     }
 
     #[test]
+    fn gmst_monotonic_over_day() {
+        // GMST should increase over the course of a day (modulo 2π wrap)
+        let jd_base = J2000_JD + 100.0; // arbitrary day
+        let g1 = gmst(jd_base);
+        let g2 = gmst(jd_base + 0.25); // 6 hours later
+        // 6 hours ≈ π/2 radians of sidereal rotation
+        let diff = (g2 - g1).rem_euclid(std::f64::consts::TAU);
+        assert!(
+            (diff - std::f64::consts::FRAC_PI_2).abs() < 0.05,
+            "6h should ≈ π/2 rad: diff={diff}"
+        );
+    }
+
+    #[test]
     fn gmst_j2000() {
-        // At J2000.0 (2000 Jan 1.5 UT1), GMST ≈ 280.46061837° from IAU expression
-        // But this is sidereal hours: 18h 41m 50.5s = 280.46°
-        // However GMST in practice at J2000.0 noon = ~100.46°
-        // (the 280° is the hour angle form; GMST = 67310.54841s / 86400 * 360 ≈ 280.46°
-        // but with the fractional day = 0 at noon, we get residual only)
+        // At J2000.0 (2000 Jan 1.5 UT1), GMST = 18h 41m 50.55s = 280.4606°
+        // IAU 1982: at 0h UT1 on Jan 1 2000, GMST = 24110.54841s = 6h 41m 50.5s
+        // Plus 12h of sidereal rotation for the half-day → 280.46°
         let g = gmst(J2000_JD);
         let g_deg = g.to_degrees();
-        // GMST at J2000.0 is ~100.46° (this is well-established)
-        assert!((g_deg - 100.46).abs() < 1.0, "GMST at J2000: {g_deg}°");
+        assert!((g_deg - 280.46).abs() < 0.1, "GMST at J2000: {g_deg}°");
     }
 
     // ── Day of year ──────────────────────────────────────────────────
@@ -312,6 +332,21 @@ mod tests {
     fn doy_invalid() {
         assert!(day_of_year(2024, 0, 1).is_err());
         assert!(day_of_year(2024, 1, 0).is_err());
+    }
+
+    #[test]
+    fn doy_feb30_rejected() {
+        assert!(day_of_year(2024, 2, 30).is_err());
+        // But Feb 29 is valid in leap year
+        assert!(day_of_year(2024, 2, 29).is_ok());
+        // And rejected in non-leap year
+        assert!(day_of_year(2023, 2, 29).is_err());
+    }
+
+    #[test]
+    fn doy_apr31_rejected() {
+        assert!(day_of_year(2024, 4, 31).is_err());
+        assert!(day_of_year(2024, 4, 30).is_ok());
     }
 
     // ── Julian centuries ─────────────────────────────────────────────

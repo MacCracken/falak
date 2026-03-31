@@ -7,31 +7,6 @@ use tracing::instrument;
 
 use crate::error::{FalakError, Result};
 
-/// A 3D position in a specific reference frame.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub struct Position {
-    /// Coordinates `[x, y, z]` (metres).
-    pub coords: [f64; 3],
-}
-
-impl Position {
-    /// Create a new position.
-    #[must_use]
-    #[inline]
-    pub fn new(x: f64, y: f64, z: f64) -> Self {
-        Self { coords: [x, y, z] }
-    }
-
-    /// Magnitude (distance from origin).
-    #[must_use]
-    #[inline]
-    pub fn magnitude(&self) -> f64 {
-        let [x, y, z] = self.coords;
-        (x * x + y * y + z * z).sqrt()
-    }
-}
-
 // ── Perifocal ↔ ECI ───────────────────────────────────────────────────────
 
 /// Transform a position from perifocal (PQW) frame to ECI frame.
@@ -85,18 +60,19 @@ pub fn eci_to_perifocal(
     let (cos_w, sin_w) = (arg_periapsis.cos(), arg_periapsis.sin());
     let (cos_i, sin_i) = (inclination.cos(), inclination.sin());
 
-    // Transpose of the perifocal→ECI matrix
+    // Transpose of the perifocal→ECI matrix (Rᵀ = R⁻¹ for rotation)
     let r11 = cos_o * cos_w - sin_o * sin_w * cos_i;
     let r21 = -(cos_o * sin_w + sin_o * cos_w * cos_i);
     let r12 = sin_o * cos_w + cos_o * sin_w * cos_i;
     let r22 = -(sin_o * sin_w - cos_o * cos_w * cos_i);
     let r13 = sin_w * sin_i;
     let r23 = cos_w * sin_i;
+    let r33 = cos_i;
 
     [
         r11 * eci[0] + r12 * eci[1] + r13 * eci[2],
         r21 * eci[0] + r22 * eci[1] + r23 * eci[2],
-        0.0, // W component is always 0 for orbits in the orbital plane
+        -sin_i * sin_o * eci[0] + sin_i * cos_o * eci[1] + r33 * eci[2],
     ]
 }
 
@@ -272,14 +248,6 @@ mod tests {
     use super::*;
     use std::f64::consts::{FRAC_PI_2, TAU};
 
-    // ── Position ─────────────────────────────────────────────────────
-
-    #[test]
-    fn position_magnitude() {
-        let p = Position::new(3.0, 4.0, 0.0);
-        assert!((p.magnitude() - 5.0).abs() < 1e-15);
-    }
-
     // ── Perifocal ↔ ECI ──────────────────────────────────────────────
 
     #[test]
@@ -328,6 +296,22 @@ mod tests {
         assert!(eci2[0].abs() < 1e-4);
         assert!(eci2[1].abs() < 1e-4);
         assert!((eci2[2] - 7e6).abs() < 1e-4, "polar Q→Z: {}", eci2[2]);
+    }
+
+    #[test]
+    fn eci_to_perifocal_out_of_plane() {
+        // For a polar orbit (i=π/2, Ω=0, ω=0), an ECI z-component should
+        // map to the Q axis (perifocal y), not be dropped.
+        let eci = [0.0, 0.0, 7e6]; // pure z in ECI
+        let pqw = eci_to_perifocal(eci, 0.0, FRAC_PI_2, 0.0);
+        // For i=π/2: W = cos(i)*z = 0, Q = cos(ω)*sin(i)*z = z
+        // Actually the mapping is: the perifocal Q-axis maps to ECI z for polar orbit
+        // So ECI z should map back to PQW Q
+        assert!(
+            (pqw[1] - 7e6).abs() < 1e-4,
+            "out-of-plane should map to Q: {:?}",
+            pqw
+        );
     }
 
     // ── ECI ↔ ECEF ───────────────────────────────────────────────────
