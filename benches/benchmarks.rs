@@ -121,6 +121,25 @@ fn ephemeris_functions(c: &mut Criterion) {
     });
 }
 
+fn propagation_functions(c: &mut Criterion) {
+    let mu = 3.986_004_418e14;
+    let elem = falak::orbit::OrbitalElements::new(7e6, 0.01, 0.5, 1.0, 0.5, 0.0).unwrap();
+
+    c.bench_function("propagate::kepler(1_period)", |b| {
+        let period = falak::kepler::orbital_period(7e6, mu).unwrap();
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::propagate::kepler(&elem, mu, period));
+        });
+    });
+
+    c.bench_function("propagate::cowell(100s,dt=10)", |b| {
+        let state = falak::kepler::elements_to_state(&elem, mu).unwrap();
+        b.iter(|| {
+            let _ = std::hint::black_box(falak::propagate::cowell(&state, mu, 100.0, 10.0, None));
+        });
+    });
+}
+
 fn perturbation_functions(c: &mut Criterion) {
     let pos = [falak::perturbation::R_EARTH + 400e3, 0.0, 0.0];
 
@@ -205,6 +224,7 @@ criterion_group!(
     transfer_functions,
     frame_transforms,
     ephemeris_functions,
+    propagation_functions,
     perturbation_functions,
     maneuver_functions,
     nbody_functions,

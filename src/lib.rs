@@ -26,6 +26,7 @@
 //! - [`maneuver`] — Impulsive burns, rocket equation, escape/capture delta-v
 //!
 //! - [`nbody`] — N-body gravitational simulation with leapfrog and RK4 integrators
+//! - [`propagate`] — Orbit propagation: analytic two-body and perturbed Cowell's method
 
 /// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
 pub mod bridge;
@@ -58,6 +59,9 @@ pub mod frame;
 
 /// Spacecraft maneuvers — impulsive burns, rocket equation, escape/capture.
 pub mod maneuver;
+
+/// Orbit propagation — two-body (Kepler) and perturbed (Cowell's method).
+pub mod propagate;
 
 /// Structured logging for falak via `FALAK_LOG` env var.
 #[cfg(feature = "logging")]

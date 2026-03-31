@@ -11,8 +11,9 @@
 - **perturbation** — J2 oblateness acceleration, J2 secular drift rates (RAAN and argument of periapsis), J3 acceleration, atmospheric drag (exponential model with `AtmosphereParams`), solar radiation pressure, third-body gravitational perturbation; physical constants (`J2_EARTH`, `J3_EARTH`, `R_EARTH`, `MU_SUN`, `SOLAR_PRESSURE_1AU`, `AU_METRES`)
 - **maneuver** — `ImpulsiveBurn` type (prograde/retrograde/normal/radial constructors), delta-v budget summing, Tsiolkovsky rocket equation (propellant mass fraction ↔ max delta-v), escape/capture delta-v from circular orbit, Oberth effect factor
 - **nbody** — `Body` and `System` types, direct O(N²) gravitational acceleration, leapfrog (kick-drift-kick) symplectic integrator, RK4 explicit integrator, `evolve` convenience function, energy conservation (kinetic + potential), centre of mass, gravitational softening, `Integrator` enum
+- **propagate** — Analytic two-body (Kepler) propagation with forward/backward time, Cowell's method (RK4) for perturbed propagation with user-supplied perturbation function, `two_body` convenience wrapper
 - **bridge** — Tara bridges (stellar mass → μ, luminosity → habitable zone), impetus bridges (gravity force, escape energy deficit), badal bridges (insolation, climate variation)
-- **integration/soorat** — `OrbitPath::from_elements` (now returns `Result`), `PlanetaryPositions`, `CelestialBody`, `TransferTrajectory`, `GroundTrack` data types
+- **integration/soorat** — `OrbitPath::from_elements` (now returns `Result`), `OrbitPath::from_elements_eci` (full perifocal→ECI rotation), `PlanetaryPositions`, `CelestialBody`, `TransferTrajectory`, `GroundTrack` data types
 
 ### Changed
 - **orbit** — `OrbitalElements::new` now accepts all orbit types: elliptical (e < 1, a > 0), parabolic (e = 1, p > 0), hyperbolic (e > 1, a < 0); periapsis returns p/2 for parabolic; apoapsis returns ∞ for open orbits

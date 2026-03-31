@@ -14,14 +14,13 @@ Falak does NOT own:
 
 ## Backlog
 
-### Orbit Propagation
-- [ ] Two-body propagation (Kepler problem forward in time)
-- [ ] Perturbed orbit propagation (J2 + drag + SRP + third-body)
-- [ ] Cowell's method (direct integration of equations of motion)
+### Orbit Propagation — Extended
 - [ ] Encke's method (deviation from reference orbit)
 - [ ] General perturbation theory (osculating → mean elements)
 
 ### N-Body Simulation — Extended
+- [ ] Pre-allocated integration buffers (RK4 allocates ~10 Vecs per step — dominates runtime for large N)
+- [ ] Canonical μ-based gravity option (current uses G×M which diverges from standard μ values)
 - [ ] Dormand-Prince (RK45) adaptive step integrator
 - [ ] Barnes-Hut tree approximation for large N
 - [ ] Restricted three-body problem (Lagrange points)
@@ -47,7 +46,6 @@ Falak does NOT own:
 - [ ] **badal bridge**: additional climate coupling parameters
 
 ### Soorat Integration — Extended
-- [ ] Orbit path in ECI frame (currently perifocal only)
 - [ ] Transfer trajectory generation from Hohmann/Lambert results
 - [ ] Ground track computation from orbital elements + GMST
 

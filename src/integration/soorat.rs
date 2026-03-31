@@ -69,6 +69,56 @@ impl OrbitPath {
             eccentricity: e,
         })
     }
+
+    /// Generate orbit path in the ECI frame from orbital elements.
+    ///
+    /// Unlike [`from_elements`](Self::from_elements), this applies the full
+    /// perifocal → ECI rotation using RAAN, inclination, and argument of periapsis.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::FalakError::InvalidParameter`] if orbital parameters or μ are invalid.
+    #[must_use = "returns the computed orbit path"]
+    pub fn from_elements_eci(
+        elements: &crate::orbit::OrbitalElements,
+        mu: f64,
+        num_points: usize,
+    ) -> crate::error::Result<Self> {
+        let a = elements.semi_major_axis;
+        let e = elements.eccentricity;
+        let period = crate::kepler::orbital_period(a, mu)?;
+
+        let mut points = Vec::with_capacity(num_points);
+        let mut speeds = Vec::with_capacity(num_points);
+
+        for i in 0..num_points {
+            let true_anom = std::f64::consts::TAU * i as f64 / num_points as f64;
+            let r = crate::kepler::radius_at_true_anomaly(a, e, true_anom);
+
+            // Perifocal coordinates
+            let pqw = [r * true_anom.cos(), r * true_anom.sin(), 0.0];
+
+            // Rotate to ECI
+            let eci = crate::frame::perifocal_to_eci(
+                pqw,
+                elements.raan,
+                elements.inclination,
+                elements.argument_of_periapsis,
+            );
+            points.push(eci);
+
+            let v = crate::kepler::vis_viva(r, a, mu)?;
+            speeds.push(v);
+        }
+
+        Ok(Self {
+            points,
+            speeds,
+            period,
+            semi_major_axis: a,
+            eccentricity: e,
+        })
+    }
 }
 
 // ── Planetary positions ────────────────────────────────────────────────────
@@ -156,6 +206,32 @@ mod tests {
             v_max > v_min * 1.5,
             "elliptical should have speed variation"
         );
+    }
+
+    #[test]
+    fn orbit_path_eci_inclined() {
+        let elements = crate::orbit::OrbitalElements::new(7e6, 0.0, 0.5, 1.0, 0.5, 0.0).unwrap();
+        let path = OrbitPath::from_elements_eci(&elements, 3.986e14, 36).unwrap();
+        assert_eq!(path.points.len(), 36);
+        // Inclined orbit in ECI should have non-zero z components
+        let has_z = path.points.iter().any(|p| p[2].abs() > 1e3);
+        assert!(has_z, "ECI inclined orbit should have z-components");
+    }
+
+    #[test]
+    fn orbit_path_eci_equatorial_matches_perifocal() {
+        // For equatorial, zero-arg orbit: ECI = perifocal
+        let elements = crate::orbit::OrbitalElements::new(7e6, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap();
+        let pf = OrbitPath::from_elements(&elements, 3.986e14, 12).unwrap();
+        let eci = OrbitPath::from_elements_eci(&elements, 3.986e14, 12).unwrap();
+        for (p, e) in pf.points.iter().zip(eci.points.iter()) {
+            for k in 0..3 {
+                assert!(
+                    (p[k] - e[k]).abs() < 1.0,
+                    "equatorial perifocal vs ECI mismatch"
+                );
+            }
+        }
     }
 
     #[test]
