@@ -32,6 +32,7 @@ impl OrbitPath {
     /// # Errors
     ///
     /// Returns [`crate::FalakError::InvalidParameter`] if orbital parameters or μ are invalid.
+    #[must_use = "returns the computed orbit path"]
     pub fn from_elements(
         elements: &crate::orbit::OrbitalElements,
         mu: f64,

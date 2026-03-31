@@ -1,6 +1,7 @@
 //! Orbital elements and state vectors.
 
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::error::{FalakError, Result};
 
@@ -42,6 +43,7 @@ impl OrbitalElements {
     /// - `semi_major_axis` is not negative for hyperbolic orbits (e > 1)
     /// - `inclination` is not in `[0, pi]`
     #[must_use = "returns the validated orbital elements"]
+    #[instrument(level = "trace")]
     pub fn new(
         semi_major_axis: f64,
         eccentricity: f64,
@@ -103,12 +105,17 @@ impl OrbitalElements {
 
     /// Periapsis distance (closest approach).
     ///
-    /// For hyperbolic orbits (a < 0), returns |a| × (1 − e) which is negative
-    /// of the standard a(1−e) but positive in magnitude since both a and (1−e) are negative.
+    /// For parabolic orbits (e = 1), returns p/2 where p is stored as `semi_major_axis`.
+    /// For hyperbolic orbits (a < 0, e > 1), returns |a|(e − 1).
     #[must_use]
     #[inline]
     pub fn periapsis(&self) -> f64 {
-        self.semi_major_axis.abs() * (1.0 - self.eccentricity).abs()
+        if (self.eccentricity - 1.0).abs() < 1e-10 {
+            // Parabolic: periapsis = p / 2
+            self.semi_major_axis / 2.0
+        } else {
+            self.semi_major_axis.abs() * (1.0 - self.eccentricity).abs()
+        }
     }
 
     /// Apoapsis distance (farthest point).
@@ -222,6 +229,28 @@ mod tests {
     fn semi_latus_rectum() {
         let orbit = OrbitalElements::new(10000.0, 0.5, 0.0, 0.0, 0.0, 0.0).unwrap();
         assert!((orbit.semi_latus_rectum() - 7500.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn periapsis_parabolic() {
+        // Parabolic: semi_major_axis stores p, periapsis = p/2
+        let orbit = OrbitalElements::new(14000.0, 1.0, 0.0, 0.0, 0.0, 0.0).unwrap();
+        assert!(
+            (orbit.periapsis() - 7000.0).abs() < 1e-10,
+            "parabolic periapsis: {}",
+            orbit.periapsis()
+        );
+    }
+
+    #[test]
+    fn periapsis_hyperbolic() {
+        // Hyperbolic: a = -10000, e = 1.5 → periapsis = |a| × |1-e| = 10000 × 0.5 = 5000
+        let orbit = OrbitalElements::new(-10000.0, 1.5, 0.0, 0.0, 0.0, 0.0).unwrap();
+        assert!(
+            (orbit.periapsis() - 5000.0).abs() < 1e-10,
+            "hyperbolic periapsis: {}",
+            orbit.periapsis()
+        );
     }
 
     #[test]
